@@ -1,5 +1,6 @@
 create extension if not exists pgcrypto;
 create schema if not exists private;
+grant usage on schema private to authenticated;
 
 create type public.app_role as enum ('super_admin', 'admin', 'finance', 'staff');
 create type public.job_status as enum ('initial', 'design', 'production', 'shipped', 'delivered', 'unpaid', 'completed');
