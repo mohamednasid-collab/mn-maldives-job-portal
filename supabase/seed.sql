@@ -1,0 +1,2 @@
+-- Local development users are created through Supabase Auth, not this seed.
+-- Factories are inserted by the initial migration.
