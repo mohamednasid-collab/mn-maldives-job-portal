@@ -1,5 +1,5 @@
 export const STATUSES = ["initial", "design", "production", "shipped", "delivered", "unpaid", "completed"] as const;
-export const FACTORIES = ["SWIFT", "DAYOUT", "INUK", "CAPTAIN", "INC9000"] as const;
+export const FACTORIES = ["SWIFT", "DAYOUT", "INUK", "CAPTAIN", "INC9000", "LANYARD SRILANKA"] as const;
 export type JobStatus = typeof STATUSES[number];
 export type AppRole = "super_admin" | "admin" | "finance" | "staff";
 
