@@ -20,7 +20,7 @@
   .column{scroll-snap-align:start}
 }
 @media(max-width:700px){
-  .sidebar{width:min(280px,86vw)}
+  .sidebar{position:fixed;inset:0 auto 0 0;width:min(280px,86vw)}
   .top{position:sticky;top:0;z-index:12;margin:-18px -15px 18px;padding:14px 15px 12px;background:rgba(243,247,249,.96);backdrop-filter:blur(10px);border-bottom:1px solid rgba(220,229,235,.8)}
   .top>div:not(.topActions){min-width:0}.top h1,.top p{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .responsiveTable{overflow:visible;background:transparent;border:0;box-shadow:none}
