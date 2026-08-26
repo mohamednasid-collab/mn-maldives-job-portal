@@ -238,7 +238,8 @@ type View =
   | "board"
   | "tasks"
   | "payments"
-  | "documents"
+  | "quotations"
+  | "invoices"
   | "expenses"
   | "users"
   | "factories";
@@ -477,7 +478,8 @@ export default function Portal() {
     { id: "board", label: "Status board", Icon: BarChart3 },
     { id: "tasks", label: "Tasks", Icon: ClipboardCheck },
     { id: "payments", label: "Payments", Icon: CreditCard },
-    { id: "documents", label: "Quotes & invoices", Icon: FileText },
+    { id: "quotations", label: "Quotations", Icon: FileText },
+    { id: "invoices", label: "Invoices", Icon: Receipt },
     { id: "expenses", label: "Expenses", Icon: Receipt },
     ...(profile.role === "super_admin"
       ? [
@@ -497,9 +499,13 @@ export default function Portal() {
       "Finance overview",
       "Track quotations, invoices and outstanding balances.",
     ],
-    documents: [
-      "Quotes & invoices",
-      "Create, store and print customer documents.",
+    quotations: [
+      "Quotations",
+      "Create, send, print and convert customer quotations.",
+    ],
+    invoices: [
+      "Invoices",
+      "Create, send, edit and print customer invoices.",
     ],
     expenses: [
       "Expense records",
@@ -572,7 +578,13 @@ export default function Portal() {
             </button>
             {canEdit &&
               !(
-                ["users", "factories", "documents", "expenses"] as View[]
+                [
+                  "users",
+                  "factories",
+                  "quotations",
+                  "invoices",
+                  "expenses",
+                ] as View[]
               ).includes(view) && (
                 <button className="primary" onClick={() => setEditing(null)}>
                   <Plus /> New job
@@ -619,8 +631,19 @@ export default function Portal() {
             open={setEditing}
           />
         )}
-        {view === "documents" && (
+        {view === "quotations" && (
           <Documents
+            mode="quotation"
+            documents={documents}
+            jobs={jobs}
+            demo={demo}
+            reload={loadData}
+            show={show}
+          />
+        )}
+        {view === "invoices" && (
+          <Documents
+            mode="invoice"
             documents={documents}
             jobs={jobs}
             demo={demo}
@@ -656,7 +679,11 @@ export default function Portal() {
         )}
       </main>
       <nav className="mobileNav">
-        {nav.slice(0, 5).map(({ id, label, Icon }) => (
+        {nav
+          .filter(({ id }) =>
+            ["dashboard", "quotations", "invoices", "expenses"].includes(id),
+          )
+          .map(({ id, label, Icon }) => (
           <button
             key={id}
             className={view === id ? "active" : ""}
@@ -665,7 +692,7 @@ export default function Portal() {
             <Icon />
             <span>{label}</span>
           </button>
-        ))}
+          ))}
       </nav>
       {editing !== undefined && (
         <JobDrawer
@@ -1416,12 +1443,14 @@ function Field({
 }
 
 function Documents({
+  mode,
   documents,
   jobs,
   demo,
   reload,
   show,
 }: {
+  mode: "quotation" | "invoice";
   documents: FinancialDocument[];
   jobs: Job[];
   demo: boolean;
@@ -1430,7 +1459,10 @@ function Documents({
 }) {
   const [open, setOpen] = useState(false);
   const [editingDoc, setEditingDoc] = useState<FinancialDocument | null>(null);
-  const [kind, setKind] = useState<"quotation" | "invoice">("quotation");
+  const kind = mode;
+  const visibleDocuments = documents.filter(
+    (document) => document.document_type === mode,
+  );
   const [items, setItems] = useState<DocumentItem[]>([
     { description: "", detail: null, quantity: 1, rate: 0, position: 1 },
   ]);
@@ -1589,25 +1621,13 @@ function Documents({
   return (
     <>
       <section className="sectionHead">
-        <h2>Customer documents</h2>
+        <h2>{mode === "quotation" ? "Customer quotations" : "Customer invoices"}</h2>
         <div className="docActions">
           <button
-            className="secondary"
-            onClick={() => {
-              setKind("quotation");
-              setOpen(true);
-            }}
-          >
-            <Plus /> Quotation
-          </button>
-          <button
             className="primary"
-            onClick={() => {
-              setKind("invoice");
-              setOpen(true);
-            }}
+            onClick={() => setOpen(true)}
           >
-            <Plus /> Invoice
+            <Plus /> New {mode}
           </button>
         </div>
       </section>
@@ -1626,7 +1646,7 @@ function Documents({
             </tr>
           </thead>
           <tbody>
-            {documents.map((d) => {
+            {visibleDocuments.map((d) => {
               const sub = d.items.reduce(
                   (a, i) => a + Number(i.quantity) * Number(i.rate),
                   0,
@@ -1702,8 +1722,10 @@ function Documents({
             })}
           </tbody>
         </table>
-        {!documents.length && (
-          <div className="empty">No quotations or invoices yet.</div>
+        {!visibleDocuments.length && (
+          <div className="empty">
+            No {mode === "quotation" ? "quotations" : "invoices"} yet.
+          </div>
         )}
       </div>
       {open && (
