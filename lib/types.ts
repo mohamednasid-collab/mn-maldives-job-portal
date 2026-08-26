@@ -1,9 +1,9 @@
 export const STATUSES = ["initial", "design", "production", "shipped", "delivered", "unpaid", "completed"] as const;
-export const FACTORIES = ["SWIFT", "DAYOUT", "INUK", "CAPTAIN", "INC9000", "LANYARDSRILANKA"] as const;
 export type JobStatus = typeof STATUSES[number];
 export type AppRole = "super_admin" | "admin" | "finance" | "staff";
 
 export interface Profile { id: string; full_name: string; email: string; role: AppRole; active: boolean; }
+export interface FactoryRecord { id: string; name: string; active: boolean; }
 export interface Job {
   id: string; job_number: string; customer_name: string; customer_phone: string | null;
   description: string; status: JobStatus; assigned_admin_id: string | null; designer_name: string | null;
