@@ -626,6 +626,7 @@ export default function Portal() {
         {view === "dashboard" && (
           <Dashboard
             jobs={jobs}
+            documents={documents}
             filtered={filtered}
             search={search}
             setSearch={setSearch}
@@ -919,6 +920,7 @@ function Filters({
 }
 function Dashboard({
   jobs,
+  documents,
   filtered,
   search,
   setSearch,
@@ -927,6 +929,7 @@ function Dashboard({
   open,
 }: {
   jobs: Job[];
+  documents: FinancialDocument[];
   filtered: Job[];
   search: string;
   setSearch: (s: string) => void;
@@ -969,11 +972,19 @@ function Dashboard({
         <h2>Recent jobs</h2>
         <Filters {...{ search, setSearch, status, setStatus }} />
       </section>
-      <JobTable jobs={filtered} open={open} />
+      <JobTable jobs={filtered} documents={documents} open={open} />
     </>
   );
 }
-function JobTable({ jobs, open }: { jobs: Job[]; open: (j: Job) => void }) {
+function JobTable({
+  jobs,
+  documents,
+  open,
+}: {
+  jobs: Job[];
+  documents: FinancialDocument[];
+  open: (j: Job) => void;
+}) {
   return (
     <div className="tableWrap responsiveTable">
       <table>
@@ -985,12 +996,19 @@ function JobTable({ jobs, open }: { jobs: Job[]; open: (j: Job) => void }) {
             <th>Due date</th>
             <th>Assigned to</th>
             <th>Factory</th>
-            <th>Payment</th>
-            <th>Value</th>
+            <th>Invoice number</th>
           </tr>
         </thead>
         <tbody>
-          {jobs.map((j) => (
+          {jobs.map((j) => {
+            const invoiceNumber =
+              j.invoice_number ||
+              documents.find(
+                (document) =>
+                  document.document_type === "invoice" &&
+                  document.job_id === j.id,
+              )?.document_number;
+            return (
             <tr key={j.id} onClick={() => open(j)}>
               <td data-label="Job">
                 <b className="jobNo">{j.job_number}</b>
@@ -1012,14 +1030,14 @@ function JobTable({ jobs, open }: { jobs: Job[]; open: (j: Job) => void }) {
                 </span>
               </td>
               <td data-label="Factory">{j.factory?.name || "—"}</td>
-              <td data-label="Payment">
-                <StatusPill value={j.payment_status} />
-              </td>
-              <td data-label="Value">
-                <strong>{money(j.invoice_total)}</strong>
+              <td data-label="Invoice number">
+                <strong style={{ color: invoiceNumber ? undefined : "#ba4035" }}>
+                  {invoiceNumber || "Invoice missing"}
+                </strong>
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
       {!jobs.length && <div className="empty">No matching jobs found.</div>}
