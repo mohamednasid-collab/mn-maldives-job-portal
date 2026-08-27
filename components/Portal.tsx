@@ -212,7 +212,7 @@ const labels: Record<string, string> = {
   initial: "Initial",
   design: "Design",
   production: "Production",
-  shipped: "Shipped",
+  shipped: "Shipped / RFD",
   delivered: "Delivered",
   unpaid: "Unpaid",
   incomplete: "Incomplete",
@@ -1112,7 +1112,7 @@ function Board({
           return (
             <section className="column" key={s}>
               <header>
-                <strong>{s === "shipped" ? "Delivery" : labels[s]}</strong>
+                <strong>{labels[s]}</strong>
                 <span>{list.length}</span>
               </header>
               {list.map((j) => (
