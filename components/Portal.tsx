@@ -1098,15 +1098,7 @@ function Board({
   setSearch: (s: string) => void;
   open: (j: Job) => void;
 }) {
-  const stages: JobStatus[] = [
-    "initial",
-    "design",
-    "production",
-    "shipped",
-    "unpaid",
-    "incomplete",
-    "completed",
-  ];
+  const stages: JobStatus[] = [...STATUSES];
   return (
     <>
       <section className="sectionHead">
@@ -1115,10 +1107,7 @@ function Board({
       </section>
       <div className="board">
         {stages.map((s) => {
-          const list = jobs.filter(
-            (j) =>
-              j.status === s || (s === "shipped" && j.status === "delivered"),
-          );
+          const list = jobs.filter((j) => j.status === s);
           return (
             <section className="column" key={s}>
               <header>
