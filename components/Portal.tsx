@@ -1098,7 +1098,9 @@ function Board({
   setSearch: (s: string) => void;
   open: (j: Job) => void;
 }) {
-  const stages: JobStatus[] = [...STATUSES];
+  const stages: JobStatus[] = STATUSES.filter(
+    (status) => status !== "delivered" && status !== "completed",
+  );
   return (
     <>
       <section className="sectionHead">
