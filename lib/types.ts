@@ -6,6 +6,7 @@ export interface Profile { id: string; full_name: string; email: string; role: A
 export interface FactoryRecord { id: string; name: string; active: boolean; }
 export interface DocumentItem { id?: string; description: string; detail: string | null; quantity: number; rate: number; position: number; }
 export interface FinancialDocument { id: string; document_type: "quotation" | "invoice"; document_number: string; status: "draft" | "sent"; source_quotation_id: string | null; job_id: string | null; customer_name: string; customer_address: string | null; subject: string | null; issue_date: string; due_date: string | null; terms: string; discount_percent: number; amount_paid: number; notes: string | null; created_at: string; items: DocumentItem[]; }
+export interface Payment { id: string; invoice_id: string; payment_date: string; amount: number; payment_method: string | null; reference: string | null; notes: string | null; created_at: string; invoice?: Pick<FinancialDocument, "id" | "document_number" | "customer_name" | "job_id" | "discount_percent" | "amount_paid" | "items"> | null; }
 export interface Expense { id: string; expense_number: string; expense_date: string; job_id: string | null; category: string; vendor: string | null; description: string; amount: number; payment_method: string | null; reference: string | null; notes: string | null; created_at: string; job?: { job_number: string } | null; }
 export interface Job {
   id: string; job_number: string; customer_name: string; customer_phone: string | null;

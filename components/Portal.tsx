@@ -32,6 +32,7 @@ import {
   FinancialDocument,
   Job,
   JobStatus,
+  Payment,
   Profile,
   STATUSES,
 } from "@/lib/types";
@@ -225,6 +226,13 @@ const labels: Record<string, string> = {
 };
 const money = (n: number) =>
   `MVR ${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const documentTotal = (document: FinancialDocument) => {
+  const subtotal = document.items.reduce(
+    (total, item) => total + Number(item.quantity) * Number(item.rate),
+    0,
+  );
+  return subtotal * (1 - Number(document.discount_percent) / 100);
+};
 const initials = (n: string) =>
   n
     .split(/\s+/)
@@ -259,6 +267,7 @@ export default function Portal() {
     demo ? demoFactories : [],
   );
   const [documents, setDocuments] = useState<FinancialDocument[]>([]);
+  const [payments, setPayments] = useState<Payment[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [view, setView] = useState<View>("dashboard");
   const [search, setSearch] = useState("");
@@ -308,6 +317,7 @@ export default function Portal() {
       { data: f, error: fe },
       { data: d, error: de },
       { data: x, error: xe },
+      { data: y, error: ye },
     ] = await Promise.all([
       sb
         .from("jobs")
@@ -329,17 +339,25 @@ export default function Portal() {
         .from("expenses")
         .select("*,job:jobs(job_number)")
         .order("expense_date", { ascending: false }),
+      sb
+        .from("payments")
+        .select(
+          "*,invoice:financial_documents!payments_invoice_id_fkey(id,document_number,customer_name,job_id,discount_percent,amount_paid,items:financial_document_items(*))",
+        )
+        .order("payment_date", { ascending: false }),
     ]);
     if (je) throw je;
     if (pe) throw pe;
     if (fe) throw fe;
     if (de) throw de;
     if (xe) throw xe;
+    if (ye) throw ye;
     setJobs((j || []) as unknown as Job[]);
     setProfiles((p || []) as Profile[]);
     setFactories((f || []) as FactoryRecord[]);
     setDocuments((d || []) as unknown as FinancialDocument[]);
     setExpenses((x || []) as unknown as Expense[]);
+    setPayments((y || []) as unknown as Payment[]);
   }
   function show(
     kind: Notice extends infer _ ? "success" | "error" : "success",
@@ -473,21 +491,26 @@ export default function Portal() {
       </div>
     );
   if (!profile) return <Login onLogin={login} />;
-  const nav = [
+  const operationsNav = [
     { id: "dashboard", label: "Dashboard", Icon: LayoutDashboard },
     { id: "board", label: "Status board", Icon: BarChart3 },
     { id: "tasks", label: "Tasks", Icon: ClipboardCheck },
+  ] as const;
+  const financeNav = [
     { id: "payments", label: "Payments", Icon: CreditCard },
     { id: "quotations", label: "Quotations", Icon: FileText },
     { id: "invoices", label: "Invoices", Icon: Receipt },
     { id: "expenses", label: "Expenses", Icon: Receipt },
-    ...(profile.role === "super_admin"
-      ? [
-          { id: "users", label: "Users", Icon: Users },
-          { id: "factories", label: "Factories", Icon: Settings },
-        ]
-      : []),
   ] as const;
+  const adminNav = [
+    { id: "users", label: "Users", Icon: Users },
+    { id: "factories", label: "Factories", Icon: Settings },
+  ] as const;
+  const nav = [
+    ...operationsNav,
+    ...financeNav,
+    ...(profile.role === "super_admin" ? adminNav : []),
+  ];
   const pageMeta: Record<View, [string, string]> = {
     dashboard: [
       "Operations overview",
@@ -531,19 +554,9 @@ export default function Portal() {
           </button>
         </div>
         <nav>
-          {nav.map(({ id, label, Icon }) => (
-            <button
-              key={id}
-              className={view === id ? "active" : ""}
-              onClick={() => {
-                setView(id as View);
-                setMenu(false);
-              }}
-            >
-              <Icon />
-              <span>{label}</span>
-            </button>
-          ))}
+          <NavGroup label="Operations" items={operationsNav} view={view} select={setView} close={() => setMenu(false)} />
+          <NavGroup label="Finance" items={financeNav} view={view} select={setView} close={() => setMenu(false)} />
+          {profile.role === "super_admin" && <NavGroup label="Administration" items={adminNav} view={view} select={setView} close={() => setMenu(false)} />}
         </nav>
         <div className="account">
           <span className="avatar">{initials(profile.full_name)}</span>
@@ -625,10 +638,13 @@ export default function Portal() {
         )}
         {view === "payments" && (
           <Payments
-            jobs={filtered}
+            payments={payments}
+            documents={documents}
+            demo={demo}
+            reload={loadData}
+            show={show}
             search={search}
             setSearch={setSearch}
-            open={setEditing}
           />
         )}
         {view === "quotations" && (
@@ -1104,19 +1120,93 @@ function Tasks({
     </>
   );
 }
+function NavGroup({
+  label,
+  items,
+  view,
+  select,
+  close,
+}: {
+  label: string;
+  items: readonly { id: View; label: string; Icon: typeof LayoutDashboard }[];
+  view: View;
+  select: (view: View) => void;
+  close: () => void;
+}) {
+  return (
+    <div className="navGroup">
+      <span className="navGroupLabel">{label}</span>
+      {items.map(({ id, label: itemLabel, Icon }) => (
+        <button
+          key={id}
+          className={view === id ? "active" : ""}
+          onClick={() => {
+            select(id);
+            close();
+          }}
+        >
+          <Icon />
+          <span>{itemLabel}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function Payments({
-  jobs,
+  payments,
+  documents,
+  demo,
+  reload,
+  show,
   search,
   setSearch,
-  open,
 }: {
-  jobs: Job[];
+  payments: Payment[];
+  documents: FinancialDocument[];
+  demo: boolean;
+  reload: () => Promise<void>;
+  show: (k: "success" | "error", t: string) => void;
   search: string;
   setSearch: (s: string) => void;
-  open: (j: Job) => void;
 }) {
-  const invoiced = jobs.reduce((a, j) => a + j.invoice_total, 0),
-    paid = jobs.reduce((a, j) => a + j.amount_paid, 0);
+  const [open, setOpen] = useState(false);
+  const invoices = documents.filter((d) => d.document_type === "invoice");
+  const invoiced = invoices.reduce((total, invoice) => total + documentTotal(invoice), 0);
+  const paid = payments.reduce((total, payment) => total + Number(payment.amount), 0);
+  const filteredPayments = payments.filter((payment) => {
+    const term = search.toLowerCase();
+    return (
+      payment.invoice?.document_number.toLowerCase().includes(term) ||
+      payment.invoice?.customer_name.toLowerCase().includes(term) ||
+      payment.reference?.toLowerCase().includes(term)
+    );
+  });
+  const save = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = Object.fromEntries(new FormData(event.currentTarget));
+    try {
+      if (demo) {
+        setOpen(false);
+        show("success", "Payment simulated in preview mode");
+        return;
+      }
+      const { error } = await createClient().from("payments").insert({
+        invoice_id: form.invoice_id,
+        payment_date: form.payment_date,
+        amount: Number(form.amount),
+        payment_method: form.payment_method || null,
+        reference: form.reference || null,
+        notes: form.notes || null,
+      });
+      if (error) throw error;
+      setOpen(false);
+      await reload();
+      show("success", "Payment recorded against invoice");
+    } catch (error) {
+      show("error", error instanceof Error ? error.message : "Unable to record payment");
+    }
+  };
   return (
     <>
       <div className="stats three">
@@ -1139,49 +1229,72 @@ function Payments({
         />
       </div>
       <section className="sectionHead">
-        <h2>Invoices & payments</h2>
-        <Filters {...{ search, setSearch }} />
+        <h2>Invoice payments</h2>
+        <div className="docActions">
+          <Filters {...{ search, setSearch }} />
+          <button className="primary" onClick={() => setOpen(true)}>
+            <Plus /> Record payment
+          </button>
+        </div>
       </section>
       <div className="tableWrap responsiveTable">
         <table>
           <thead>
             <tr>
               <th>Invoice</th>
-              <th>Job</th>
               <th>Customer</th>
-              <th>Quotation</th>
-              <th>Total</th>
-              <th>Payment</th>
-              <th>Due date</th>
+              <th>Payment date</th>
+              <th>Method</th>
+              <th>Reference</th>
+              <th>Amount</th>
             </tr>
           </thead>
           <tbody>
-            {jobs
-              .filter((j) => j.invoice_number || j.quotation_number)
-              .map((j) => (
-                <tr key={j.id} onClick={() => open(j)}>
+            {filteredPayments.map((payment) => (
+                <tr key={payment.id}>
                   <td data-label="Invoice">
-                    <b className="jobNo">{j.invoice_number || "Pending"}</b>
+                    <b className="jobNo">{payment.invoice?.document_number || "—"}</b>
                   </td>
-                  <td data-label="Job">{j.job_number}</td>
                   <td data-label="Customer">
-                    <strong>{j.customer_name}</strong>
+                    <strong>{payment.invoice?.customer_name || "—"}</strong>
                   </td>
-                  <td data-label="Quotation">{j.quotation_number || "—"}</td>
-                  <td data-label="Total">
-                    <strong>{money(j.invoice_total)}</strong>
-                  </td>
-                  <td data-label="Payment">
-                    <StatusPill value={j.payment_status} />
-                  </td>
-                  <td data-label="Due date">
-                    <DueDate date={j.due_date} status={j.status} />
-                  </td>
+                  <td data-label="Payment date">{formatDate(payment.payment_date)}</td>
+                  <td data-label="Method">{payment.payment_method || "—"}</td>
+                  <td data-label="Reference">{payment.reference || "—"}</td>
+                  <td data-label="Amount"><strong>{money(payment.amount)}</strong></td>
                 </tr>
               ))}
           </tbody>
         </table>
+        {!filteredPayments.length && <div className="empty">No invoice payments recorded yet.</div>}
       </div>
+      {open && (
+        <div className="modal">
+          <form className="drawer" onSubmit={save}>
+            <header>
+              <div><span className="eyebrow">FINANCE</span><h2>Record invoice payment</h2></div>
+              <button type="button" className="iconBtn" onClick={() => setOpen(false)}><X /></button>
+            </header>
+            <div className="formGrid">
+              <Field label="Invoice" wide>
+                <select name="invoice_id" required defaultValue="">
+                  <option value="" disabled>Select invoice</option>
+                  {invoices.map((invoice) => {
+                    const balance = Math.max(0, documentTotal(invoice) - Number(invoice.amount_paid));
+                    return <option key={invoice.id} value={invoice.id} disabled={balance <= 0}>{invoice.document_number} · {invoice.customer_name} · Balance {money(balance)}</option>;
+                  })}
+                </select>
+              </Field>
+              <Field label="Payment date"><input name="payment_date" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} /></Field>
+              <Field label="Amount"><input name="amount" type="number" min="0.01" step="0.01" required /></Field>
+              <Field label="Payment method"><select name="payment_method"><option value="Bank transfer">Bank transfer</option><option value="Cash">Cash</option><option value="Cheque">Cheque</option><option value="Card">Card</option><option value="Other">Other</option></select></Field>
+              <Field label="Reference"><input name="reference" placeholder="Transfer or receipt reference" /></Field>
+              <Field label="Notes" wide><textarea name="notes" rows={3} /></Field>
+            </div>
+            <footer><button type="button" className="secondary" onClick={() => setOpen(false)}>Cancel</button><button className="primary" type="submit">Record payment</button></footer>
+          </form>
+        </div>
+      )}
     </>
   );
 }
