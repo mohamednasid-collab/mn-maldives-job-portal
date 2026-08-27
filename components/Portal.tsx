@@ -1407,13 +1407,18 @@ function JobDrawer({
   onDelete: (id: string) => Promise<void>;
 }) {
   const [form, setForm] = useState<Partial<Job>>(
-    job || {
-      status: "initial",
-      owner_id: currentUserId,
-      payment_status: "unpaid",
-      invoice_total: 0,
-      amount_paid: 0,
-    },
+    job
+      ? {
+          ...job,
+          status: job.status === "unpaid" ? "incomplete" : job.status,
+        }
+      : {
+          status: "initial",
+          owner_id: currentUserId,
+          payment_status: "unpaid",
+          invoice_total: 0,
+          amount_paid: 0,
+        },
   );
   const set = (k: keyof Job, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
   const available = factories.filter(
@@ -1476,7 +1481,7 @@ function JobDrawer({
                 value={form.status}
                 onChange={(e) => set("status", e.target.value)}
               >
-                {STATUSES.map((s) => (
+                {STATUSES.filter((s) => s !== "unpaid").map((s) => (
                   <option key={s} value={s}>
                     {labels[s]}
                   </option>
@@ -1536,7 +1541,7 @@ function JobDrawer({
             </Field>
           </div>
         </FormSection>
-        <FormSection title="Quotation, invoice & payment">
+        <FormSection title="Quotation, invoice & due date">
           <div className="warning">
             Delivered jobs move to Completed only when an invoice number exists.
             Otherwise the database moves them to Incomplete.
@@ -1554,34 +1559,6 @@ function JobDrawer({
                 onChange={(e) => set("invoice_number", e.target.value)}
               />
             </Field>
-            <Field label="Invoice total (MVR)">
-              <input
-                type="number"
-                min="0"
-                step=".01"
-                value={form.invoice_total || 0}
-                onChange={(e) => set("invoice_total", +e.target.value)}
-              />
-            </Field>
-            <Field label="Amount paid (MVR)">
-              <input
-                type="number"
-                min="0"
-                step=".01"
-                value={form.amount_paid || 0}
-                onChange={(e) => set("amount_paid", +e.target.value)}
-              />
-            </Field>
-            <Field label="Payment status">
-              <select
-                value={form.payment_status}
-                onChange={(e) => set("payment_status", e.target.value)}
-              >
-                <option value="unpaid">Unpaid</option>
-                <option value="part_paid">Part-paid</option>
-                <option value="paid">Paid</option>
-              </select>
-            </Field>
             <Field label="Due date">
               <input
                 type="date"
@@ -1592,16 +1569,17 @@ function JobDrawer({
           </fieldset>
           {!canFinance && (
             <small className="helper">
-              Your account has read-only access to payment fields.
+              Your account has read-only access to quotation, invoice and due
+              date fields.
             </small>
           )}
-        </FormSection>
-        <FormSection title="Internal notes">
-          <textarea
-            rows={3}
-            value={form.notes || ""}
-            onChange={(e) => set("notes", e.target.value)}
-          />
+          <Field label="Internal notes" wide>
+            <textarea
+              rows={3}
+              value={form.notes || ""}
+              onChange={(e) => set("notes", e.target.value)}
+            />
+          </Field>
         </FormSection>
         <footer>
           {job && canDelete && (
