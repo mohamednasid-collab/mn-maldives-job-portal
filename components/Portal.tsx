@@ -963,10 +963,6 @@ function Dashboard({
   setStatus: (s: string) => void;
   open: (j: Job) => void;
 }) {
-  const due = jobs.reduce(
-    (a, j) => a + Math.max(0, j.invoice_total - j.amount_paid),
-    0,
-  );
   return (
     <>
       <div className="stats">
@@ -982,9 +978,9 @@ function Dashboard({
           tone="amber"
         />
         <Stat
-          label="Outstanding"
-          value={money(due)}
-          Icon={CreditCard}
+          label="All job records"
+          value={jobs.length}
+          Icon={ClipboardCheck}
           tone="coral"
         />
         <Stat
