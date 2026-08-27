@@ -1099,7 +1099,10 @@ function Board({
   open: (j: Job) => void;
 }) {
   const stages: JobStatus[] = STATUSES.filter(
-    (status) => status !== "delivered" && status !== "completed",
+    (status) =>
+      status !== "delivered" &&
+      status !== "unpaid" &&
+      status !== "completed",
   );
   return (
     <>
