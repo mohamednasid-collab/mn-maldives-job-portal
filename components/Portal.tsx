@@ -250,7 +250,6 @@ type View =
   | "dashboard"
   | "board"
   | "tasks"
-  | "payments"
   | "quotations"
   | "invoices"
   | "expenses"
@@ -546,7 +545,6 @@ export default function Portal() {
     { id: "tasks", label: "Tasks", Icon: ClipboardCheck },
   ] as const;
   const financeNav = [
-    { id: "payments", label: "Payments", Icon: CreditCard },
     { id: "quotations", label: "Quotations", Icon: FileText },
     { id: "invoices", label: "Invoices", Icon: Receipt },
     { id: "expenses", label: "Expenses", Icon: Receipt },
@@ -567,10 +565,6 @@ export default function Portal() {
     ],
     board: ["Workflow board", "See every active job at a glance."],
     tasks: ["Team tasks", "Work assigned across the administrative team."],
-    payments: [
-      "Finance overview",
-      "Track quotations, invoices and outstanding balances.",
-    ],
     quotations: [
       "Quotations",
       "Create, send, print and convert customer quotations.",
@@ -686,21 +680,11 @@ export default function Portal() {
         {view === "tasks" && (
           <Tasks tasks={tasks} jobs={filtered} profiles={profiles} open={setEditing} />
         )}
-        {view === "payments" && (
-          <Payments
-            payments={payments}
-            documents={documents}
-            demo={demo}
-            reload={loadData}
-            show={show}
-            search={search}
-            setSearch={setSearch}
-          />
-        )}
         {view === "quotations" && (
           <Documents
             mode="quotation"
             documents={documents}
+            payments={payments}
             jobs={jobs}
             demo={demo}
             reload={loadData}
@@ -711,6 +695,7 @@ export default function Portal() {
           <Documents
             mode="invoice"
             documents={documents}
+            payments={payments}
             jobs={jobs}
             demo={demo}
             reload={loadData}
@@ -1674,6 +1659,7 @@ function Field({
 function Documents({
   mode,
   documents,
+  payments,
   jobs,
   demo,
   reload,
@@ -1681,6 +1667,7 @@ function Documents({
 }: {
   mode: "quotation" | "invoice";
   documents: FinancialDocument[];
+  payments: Payment[];
   jobs: Job[];
   demo: boolean;
   reload: () => Promise<void>;
@@ -1688,6 +1675,8 @@ function Documents({
 }) {
   const [open, setOpen] = useState(false);
   const [editingDoc, setEditingDoc] = useState<FinancialDocument | null>(null);
+  const [payingInvoice, setPayingInvoice] =
+    useState<FinancialDocument | null>(null);
   const kind = mode;
   const visibleDocuments = documents.filter(
     (document) => document.document_type === mode,
@@ -1697,6 +1686,13 @@ function Documents({
   ]);
   const subtotal = items.reduce(
     (a, i) => a + Number(i.quantity) * Number(i.rate),
+    0,
+  );
+  const totalInvoiced = documents
+    .filter((document) => document.document_type === "invoice")
+    .reduce((total, invoice) => total + documentTotal(invoice), 0);
+  const paymentsReceived = payments.reduce(
+    (total, payment) => total + Number(payment.amount),
     0,
   );
   const reset = () => {
@@ -1785,6 +1781,35 @@ function Documents({
       );
     }
   };
+  const recordPayment = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!payingInvoice) return;
+    const form = Object.fromEntries(new FormData(event.currentTarget));
+    try {
+      if (demo) {
+        setPayingInvoice(null);
+        show("success", "Payment simulated in preview mode");
+        return;
+      }
+      const { error } = await createClient().from("payments").insert({
+        invoice_id: payingInvoice.id,
+        payment_date: form.payment_date,
+        amount: Number(form.amount),
+        payment_method: form.payment_method || null,
+        reference: form.reference || null,
+        notes: form.notes || null,
+      });
+      if (error) throw error;
+      setPayingInvoice(null);
+      await reload();
+      show("success", `Payment recorded for ${payingInvoice.document_number}`);
+    } catch (error) {
+      show(
+        "error",
+        error instanceof Error ? error.message : "Unable to record payment",
+      );
+    }
+  };
   const convert = async (q: FinancialDocument) => {
     if (documents.some((d) => d.source_quotation_id === q.id)) {
       show("error", "This quotation has already been converted");
@@ -1849,6 +1874,13 @@ function Documents({
   };
   return (
     <>
+      {mode === "invoice" && (
+        <div className="stats three">
+          <Stat label="Total invoiced" value={money(totalInvoiced)} Icon={CreditCard} />
+          <Stat label="Payments received" value={money(paymentsReceived)} Icon={Check} tone="green" />
+          <Stat label="Outstanding balance" value={money(Math.max(0, totalInvoiced - paymentsReceived))} Icon={CreditCard} tone="coral" />
+        </div>
+      )}
       <section className="sectionHead">
         <h2>{mode === "quotation" ? "Customer quotations" : "Customer invoices"}</h2>
         <div className="docActions">
@@ -1935,6 +1967,15 @@ function Documents({
                           Edit
                         </button>
                       )}
+                      {d.document_type === "invoice" && (
+                        <button
+                          className="primary compact"
+                          disabled={balance <= 0}
+                          onClick={() => setPayingInvoice(d)}
+                        >
+                          {balance <= 0 ? "Paid" : "Record payment"}
+                        </button>
+                      )}
                       {d.document_type === "quotation" && (
                         <button
                           className="primary compact"
@@ -1957,6 +1998,29 @@ function Documents({
           </div>
         )}
       </div>
+      {payingInvoice && (
+        <div className="modal">
+          <form className="drawer" onSubmit={recordPayment}>
+            <header>
+              <div>
+                <span className="eyebrow">INVOICE PAYMENT</span>
+                <h2>{payingInvoice.document_number}</h2>
+              </div>
+              <button type="button" className="iconBtn" onClick={() => setPayingInvoice(null)}><X /></button>
+            </header>
+            <div className="formGrid">
+              <Field label="Customer" wide><input value={payingInvoice.customer_name} readOnly /></Field>
+              <Field label="Outstanding balance" wide><input value={money(Math.max(0, documentTotal(payingInvoice) - Number(payingInvoice.amount_paid)))} readOnly /></Field>
+              <Field label="Payment date"><input name="payment_date" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} /></Field>
+              <Field label="Amount"><input name="amount" type="number" min="0.01" max={Math.max(0, documentTotal(payingInvoice) - Number(payingInvoice.amount_paid))} step="0.01" required /></Field>
+              <Field label="Payment method"><select name="payment_method"><option value="Bank transfer">Bank transfer</option><option value="Cash">Cash</option><option value="Cheque">Cheque</option><option value="Card">Card</option><option value="Other">Other</option></select></Field>
+              <Field label="Reference"><input name="reference" placeholder="Transfer or receipt reference" /></Field>
+              <Field label="Notes" wide><textarea name="notes" rows={3} /></Field>
+            </div>
+            <footer><button type="button" className="secondary" onClick={() => setPayingInvoice(null)}>Cancel</button><button className="primary" type="submit">Record payment</button></footer>
+          </form>
+        </div>
+      )}
       {open && (
         <div className="modal">
           <form className="drawer" onSubmit={save}>
