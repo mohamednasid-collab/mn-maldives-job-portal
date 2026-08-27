@@ -1,4 +1,4 @@
-export const STATUSES = ["initial", "design", "production", "shipped", "delivered", "unpaid", "completed"] as const;
+export const STATUSES = ["initial", "design", "production", "shipped", "delivered", "unpaid", "incomplete", "completed"] as const;
 export type JobStatus = typeof STATUSES[number];
 export type AppRole = "super_admin" | "admin" | "finance" | "staff";
 

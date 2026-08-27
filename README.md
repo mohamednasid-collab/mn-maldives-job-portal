@@ -9,7 +9,7 @@ A responsive production application for managing customer jobs from initial enqu
 - Database-generated `MN-YYYY-####` job numbers
 - Dashboard, workflow board, assignments, finance overview, filters, and CSV export
 - Customer/job editing with designer and factory assignment
-- Database-enforced payment gate: unpaid delivered jobs become `Unpaid`; only fully paid jobs become `Completed`
+- Database-enforced invoice gate: delivered jobs with an invoice become `Completed`; jobs without one become `Incomplete`
 - User invitation flow restricted to the Super Admin
 - Row Level Security on every application table
 - Private Supabase Storage policies for future artwork, quotation, invoice, and delivery files

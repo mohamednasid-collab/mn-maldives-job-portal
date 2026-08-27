@@ -214,6 +214,7 @@ const labels: Record<string, string> = {
   shipped: "Shipped",
   delivered: "Delivered",
   unpaid: "Unpaid",
+  incomplete: "Incomplete",
   completed: "Completed",
   part_paid: "Part-paid",
   paid: "Paid",
@@ -404,13 +405,16 @@ export default function Portal() {
   );
   async function saveJob(input: Partial<Job>) {
     try {
-      if (input.status === "completed" && input.payment_status !== "paid")
-        throw new Error(
-          "A job cannot be completed until its invoice is fully paid.",
-        );
       if (demo) {
         const assignee = profiles.find((p) => p.id === input.assigned_admin_id);
         const current = input.id ? jobs.find((j) => j.id === input.id) : null;
+        const hasInvoice =
+          Boolean(input.invoice_number?.trim()) ||
+          documents.some(
+            (document) =>
+              document.document_type === "invoice" &&
+              document.job_id === input.id,
+          );
         const record = {
           ...(current || demoJobs[0]),
           ...input,
@@ -424,6 +428,11 @@ export default function Portal() {
           factory: input.factory_id
             ? { name: input.factory_id.toUpperCase() }
             : null,
+          status: ["delivered", "completed"].includes(input.status || "")
+            ? hasInvoice
+              ? "completed"
+              : "incomplete"
+            : input.status,
         } as Job;
         setJobs(
           current
@@ -1034,6 +1043,7 @@ function Board({
     "production",
     "shipped",
     "unpaid",
+    "incomplete",
     "completed",
   ];
   return (
@@ -1437,8 +1447,8 @@ function JobDrawer({
         </FormSection>
         <FormSection title="Quotation, invoice & payment">
           <div className="warning">
-            Delivered jobs move to Completed only after full payment. Otherwise
-            the database moves them to Unpaid.
+            Delivered jobs move to Completed only when an invoice number exists.
+            Otherwise the database moves them to Incomplete.
           </div>
           <fieldset disabled={!canFinance} className="formGrid">
             <Field label="Quotation number">
