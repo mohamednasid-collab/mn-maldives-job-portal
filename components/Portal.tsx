@@ -963,9 +963,17 @@ function Dashboard({
   setStatus: (s: string) => void;
   open: (j: Job) => void;
 }) {
+  const invoiceMissing = jobs.filter(
+    (job) =>
+      !job.invoice_number?.trim() &&
+      !documents.some(
+        (document) =>
+          document.document_type === "invoice" && document.job_id === job.id,
+      ),
+  ).length;
   return (
     <>
-      <div className="stats">
+      <div className="stats five">
         <Stat
           label="Active jobs"
           value={jobs.filter((j) => j.status !== "completed").length}
@@ -978,9 +986,15 @@ function Dashboard({
           tone="amber"
         />
         <Stat
-          label="All job records"
-          value={jobs.length}
+          label="Incomplete"
+          value={jobs.filter((j) => j.status === "incomplete").length}
           Icon={ClipboardCheck}
+          tone="coral"
+        />
+        <Stat
+          label="Invoice missing"
+          value={invoiceMissing}
+          Icon={Receipt}
           tone="coral"
         />
         <Stat
