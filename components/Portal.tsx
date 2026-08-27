@@ -35,6 +35,7 @@ import {
   Payment,
   Profile,
   STATUSES,
+  Task,
 } from "@/lib/types";
 
 const demoJobs: Job[] = [
@@ -224,6 +225,9 @@ const labels: Record<string, string> = {
   admin: "Administrator",
   finance: "Finance",
   staff: "Staff",
+  todo: "To do",
+  in_progress: "In progress",
+  done: "Done",
 };
 const money = (n: number) =>
   `MVR ${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -269,6 +273,7 @@ export default function Portal() {
   );
   const [documents, setDocuments] = useState<FinancialDocument[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [view, setView] = useState<View>("dashboard");
   const [search, setSearch] = useState("");
@@ -319,11 +324,12 @@ export default function Portal() {
       { data: d, error: de },
       { data: x, error: xe },
       { data: y, error: ye },
+      { data: t, error: te },
     ] = await Promise.all([
       sb
         .from("jobs")
         .select(
-          "*,assignee:profiles!jobs_assigned_admin_id_fkey(full_name),factory:factories(name)",
+          "*,owner:profiles!jobs_owner_id_fkey(full_name),assignee:profiles!jobs_assigned_admin_id_fkey(full_name),factory:factories(name)",
         )
         .order("created_at", { ascending: false }),
       sb
@@ -346,6 +352,12 @@ export default function Portal() {
           "*,invoice:financial_documents!payments_invoice_id_fkey(id,document_number,customer_name,job_id,discount_percent,amount_paid,items:financial_document_items(*))",
         )
         .order("payment_date", { ascending: false }),
+      sb
+        .from("tasks")
+        .select(
+          "*,assignee:profiles!tasks_assigned_to_fkey(full_name),job:jobs(job_number,customer_name)",
+        )
+        .order("created_at", { ascending: false }),
     ]);
     if (je) throw je;
     if (pe) throw pe;
@@ -353,12 +365,14 @@ export default function Portal() {
     if (de) throw de;
     if (xe) throw xe;
     if (ye) throw ye;
+    if (te) throw te;
     setJobs((j || []) as unknown as Job[]);
     setProfiles((p || []) as Profile[]);
     setFactories((f || []) as FactoryRecord[]);
     setDocuments((d || []) as unknown as FinancialDocument[]);
     setExpenses((x || []) as unknown as Expense[]);
     setPayments((y || []) as unknown as Payment[]);
+    setTasks((t || []) as unknown as Task[]);
   }
   function show(
     kind: Notice extends infer _ ? "success" | "error" : "success",
@@ -425,6 +439,14 @@ export default function Portal() {
           created_at: current?.created_at || new Date().toISOString(),
           updated_at: new Date().toISOString(),
           assignee: assignee ? { full_name: assignee.full_name } : null,
+          owner_id: input.owner_id || profile?.id || null,
+          owner: profiles.find((p) => p.id === (input.owner_id || profile?.id))
+            ? {
+                full_name: profiles.find(
+                  (p) => p.id === (input.owner_id || profile?.id),
+                )!.full_name,
+              }
+            : null,
           factory: input.factory_id
             ? { name: input.factory_id.toUpperCase() }
             : null,
@@ -449,6 +471,7 @@ export default function Portal() {
         customer_phone: input.customer_phone || null,
         description: input.description,
         status: input.status,
+        owner_id: input.owner_id || profile?.id,
         assigned_admin_id: input.assigned_admin_id || null,
         designer_name: input.designer_name || null,
         factory_id: input.factory_id || null,
@@ -464,10 +487,27 @@ export default function Portal() {
       const q = input.id
         ? sb.from("jobs").update(payload).eq("id", input.id)
         : sb.from("jobs").insert(payload);
-      const { error } = await q;
+      const { data: saved, error } = await q.select("id").single();
       if (error) throw error;
       setEditing(undefined);
       await loadData();
+      if (input.status === "production" && saved?.id) {
+        const response = await fetch("/api/notifications/finance", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job_id: saved.id }),
+        });
+        if (!response.ok) {
+          const result = (await response.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          show(
+            "error",
+            `Job saved and Finance task assigned. ${result.error || "Email notification is not configured."}`,
+          );
+          return;
+        }
+      }
       show("success", "Job saved successfully");
     } catch (e) {
       show("error", e instanceof Error ? e.message : "Unable to save job");
@@ -644,7 +684,7 @@ export default function Portal() {
           />
         )}
         {view === "tasks" && (
-          <Tasks jobs={filtered} profiles={profiles} open={setEditing} />
+          <Tasks tasks={tasks} jobs={filtered} profiles={profiles} open={setEditing} />
         )}
         {view === "payments" && (
           <Payments
@@ -723,6 +763,7 @@ export default function Portal() {
       {editing !== undefined && (
         <JobDrawer
           job={editing}
+          currentUserId={profile.id}
           profiles={profiles}
           factories={factories}
           canFinance={canFinance}
@@ -994,6 +1035,7 @@ function JobTable({
             <th>Customer</th>
             <th>Status</th>
             <th>Due date</th>
+            <th>Owner</th>
             <th>Assigned to</th>
             <th>Factory</th>
             <th>Invoice number</th>
@@ -1022,6 +1064,12 @@ function JobTable({
               </td>
               <td data-label="Due date">
                 <DueDate date={j.due_date} status={j.status} />
+              </td>
+              <td data-label="Owner">
+                <span className="person">
+                  <i>{initials(j.owner?.full_name || "—")}</i>
+                  {j.owner?.full_name || "Unassigned"}
+                </span>
               </td>
               <td data-label="Assigned to">
                 <span className="person">
@@ -1088,7 +1136,9 @@ function Board({
                   <strong>{j.customer_name}</strong>
                   <small>{j.description}</small>
                   <footer>
-                    <span>{j.next_task || "No next task"}</span>
+                    <span>
+                      Owner: {j.owner?.full_name || "—"} · {j.next_task || "No next task"}
+                    </span>
                     <i>{initials(j.assignee?.full_name || "—")}</i>
                   </footer>
                 </button>
@@ -1102,10 +1152,12 @@ function Board({
   );
 }
 function Tasks({
+  tasks,
   jobs,
   profiles,
   open,
 }: {
+  tasks: Task[];
   jobs: Job[];
   profiles: Profile[];
   open: (j: Job) => void;
@@ -1119,8 +1171,11 @@ function Tasks({
         {profiles
           .filter((p) => ["super_admin", "admin", "finance"].includes(p.role))
           .map((p) => {
-            const list = jobs.filter(
+            const assignedJobs = jobs.filter(
               (j) => j.assigned_admin_id === p.id && j.status !== "completed",
+            );
+            const assignedTasks = tasks.filter(
+              (task) => task.assigned_to === p.id && task.status !== "done",
             );
             return (
               <section className="taskLane" key={p.id}>
@@ -1129,9 +1184,25 @@ function Tasks({
                     <i>{initials(p.full_name)}</i>
                     <strong>{p.full_name}</strong>
                   </span>
-                  <b>{list.length}</b>
+                  <b>{assignedJobs.length + assignedTasks.length}</b>
                 </header>
-                {list.map((j) => (
+                {assignedTasks.map((task) => {
+                  const job = jobs.find((item) => item.id === task.job_id);
+                  return (
+                    <button
+                      className="task"
+                      key={task.id}
+                      onClick={() => job && open(job)}
+                    >
+                      <strong>{task.title}</strong>
+                      <small>
+                        {task.job?.job_number || job?.job_number || "Job"} · {task.job?.customer_name || job?.customer_name || "Customer"}
+                      </small>
+                      <StatusPill value={task.status} />
+                    </button>
+                  );
+                })}
+                {assignedJobs.map((j) => (
                   <button className="task" key={j.id} onClick={() => open(j)}>
                     <strong>{j.next_task || "Review job"}</strong>
                     <small>
@@ -1140,7 +1211,9 @@ function Tasks({
                     <StatusPill value={j.status} />
                   </button>
                 ))}
-                {!list.length && <div className="empty small">All clear</div>}
+                {!assignedJobs.length && !assignedTasks.length && (
+                  <div className="empty small">All clear</div>
+                )}
               </section>
             );
           })}
@@ -1329,6 +1402,7 @@ function Payments({
 
 function JobDrawer({
   job,
+  currentUserId,
   profiles,
   factories,
   canFinance,
@@ -1338,6 +1412,7 @@ function JobDrawer({
   onDelete,
 }: {
   job: Job | null;
+  currentUserId: string;
   profiles: Profile[];
   factories: FactoryRecord[];
   canFinance: boolean;
@@ -1349,6 +1424,7 @@ function JobDrawer({
   const [form, setForm] = useState<Partial<Job>>(
     job || {
       status: "initial",
+      owner_id: currentUserId,
       payment_status: "unpaid",
       invoice_total: 0,
       amount_paid: 0,
@@ -1428,6 +1504,18 @@ function JobDrawer({
                 onChange={(e) => set("assigned_admin_id", e.target.value)}
               >
                 <option value="">Unassigned</option>
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.full_name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Job owner">
+              <select
+                value={form.owner_id || currentUserId}
+                onChange={(e) => set("owner_id", e.target.value)}
+              >
                 {profiles.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.full_name}
