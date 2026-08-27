@@ -38,3 +38,67 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to invite user" }, { status: 500 });
   }
 }
+
+export async function PATCH(request: Request) {
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
+    const { data: requester } = await supabase
+      .from("profiles")
+      .select("role,active")
+      .eq("id", user.id)
+      .single();
+    if (!requester?.active || requester.role !== "super_admin") {
+      return NextResponse.json(
+        { error: "Super administrator access required" },
+        { status: 403 },
+      );
+    }
+
+    const { id, display_name } = (await request.json()) as {
+      id?: string;
+      display_name?: string;
+    };
+    const name = display_name?.trim();
+    if (!id || !name || name.length < 2 || name.length > 100) {
+      return NextResponse.json(
+        { error: "Display name must contain 2 to 100 characters" },
+        { status: 400 },
+      );
+    }
+
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const secret = process.env.SUPABASE_SECRET_KEY;
+    if (!url || !secret) {
+      return NextResponse.json(
+        { error: "Server authentication is not configured" },
+        { status: 500 },
+      );
+    }
+    const admin = createAdminClient(url, secret, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const [{ error: profileError }, { error: authError }] = await Promise.all([
+      admin.from("profiles").update({ full_name: name }).eq("id", id),
+      admin.auth.admin.updateUserById(id, {
+        user_metadata: { full_name: name },
+      }),
+    ]);
+    if (profileError) throw profileError;
+    if (authError) throw authError;
+    return NextResponse.json({ id, display_name: name });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "Unable to update display name",
+      },
+      { status: 500 },
+    );
+  }
+}

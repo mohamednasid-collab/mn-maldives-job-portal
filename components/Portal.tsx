@@ -2790,6 +2790,7 @@ function UserAdmin({
   show: (k: "success" | "error", t: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
   const invite = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const body = Object.fromEntries(new FormData(e.currentTarget));
@@ -2813,6 +2814,36 @@ function UserAdmin({
       show("error", err instanceof Error ? err.message : "Invite failed");
     }
   };
+  const updateDisplayName = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!editingProfile) return;
+    const form = Object.fromEntries(new FormData(e.currentTarget));
+    try {
+      if (demo) {
+        show("success", "Display name simulated in preview mode");
+        setEditingProfile(null);
+        return;
+      }
+      const res = await fetch("/api/admin/users", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: editingProfile.id,
+          display_name: form.display_name,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error);
+      setEditingProfile(null);
+      await reload();
+      show("success", "Display name updated");
+    } catch (err) {
+      show(
+        "error",
+        err instanceof Error ? err.message : "Unable to update display name",
+      );
+    }
+  };
   return (
     <>
       <section className="sectionHead">
@@ -2829,6 +2860,13 @@ function UserAdmin({
               <strong>{p.full_name}</strong>
               <span>{p.email}</span>
               <StatusPill value={p.role} />
+              <button
+                type="button"
+                className="secondary compact"
+                onClick={() => setEditingProfile(p)}
+              >
+                Edit display name
+              </button>
             </div>
             <i className={p.active ? "online" : ""} />
           </article>
@@ -2850,7 +2888,7 @@ function UserAdmin({
                 <X />
               </button>
             </header>
-            <Field label="Full name">
+            <Field label="Display name">
               <input name="full_name" required />
             </Field>
             <Field label="Email address">
@@ -2865,6 +2903,37 @@ function UserAdmin({
             </Field>
             <button className="primary" type="submit">
               Send invitation
+            </button>
+          </form>
+        </div>
+      )}
+      {editingProfile && (
+        <div className="modal">
+          <form className="smallModal" onSubmit={updateDisplayName}>
+            <header>
+              <div>
+                <span className="eyebrow">USER PROFILE</span>
+                <h2>Edit display name</h2>
+              </div>
+              <button
+                className="iconBtn"
+                type="button"
+                onClick={() => setEditingProfile(null)}
+              >
+                <X />
+              </button>
+            </header>
+            <Field label="Display name">
+              <input
+                name="display_name"
+                required
+                minLength={2}
+                maxLength={100}
+                defaultValue={editingProfile.full_name}
+              />
+            </Field>
+            <button className="primary" type="submit">
+              Save display name
             </button>
           </form>
         </div>
