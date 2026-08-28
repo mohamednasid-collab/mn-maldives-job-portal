@@ -14,6 +14,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  Package,
   Plus,
   Printer,
   Receipt,
@@ -32,6 +33,7 @@ import {
   FinancialDocument,
   Job,
   JobStatus,
+  Item,
   Payment,
   Profile,
   STATUSES,
@@ -250,6 +252,7 @@ type View =
   | "dashboard"
   | "board"
   | "tasks"
+  | "items"
   | "quotations"
   | "invoices"
   | "expenses"
@@ -270,6 +273,7 @@ export default function Portal() {
   const [factories, setFactories] = useState<FactoryRecord[]>(
     demo ? demoFactories : [],
   );
+  const [items, setItems] = useState<Item[]>([]);
   const [documents, setDocuments] = useState<FinancialDocument[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -324,6 +328,7 @@ export default function Portal() {
       { data: x, error: xe },
       { data: y, error: ye },
       { data: t, error: te },
+      { data: i, error: ie },
     ] = await Promise.all([
       sb
         .from("jobs")
@@ -357,6 +362,7 @@ export default function Portal() {
           "*,assignee:profiles!tasks_assigned_to_fkey(full_name),job:jobs(job_number,customer_name)",
         )
         .order("created_at", { ascending: false }),
+      sb.from("items").select("id,name,rate,description,created_at").order("name"),
     ]);
     if (je) throw je;
     if (pe) throw pe;
@@ -365,6 +371,7 @@ export default function Portal() {
     if (xe) throw xe;
     if (ye) throw ye;
     if (te) throw te;
+    if (ie) throw ie;
     setJobs((j || []) as unknown as Job[]);
     setProfiles((p || []) as Profile[]);
     setFactories((f || []) as FactoryRecord[]);
@@ -372,6 +379,7 @@ export default function Portal() {
     setExpenses((x || []) as unknown as Expense[]);
     setPayments((y || []) as unknown as Payment[]);
     setTasks((t || []) as unknown as Task[]);
+    setItems((i || []) as unknown as Item[]);
   }
   function show(
     kind: Notice extends infer _ ? "success" | "error" : "success",
@@ -543,6 +551,7 @@ export default function Portal() {
     { id: "dashboard", label: "Dashboard", Icon: LayoutDashboard },
     { id: "board", label: "Status board", Icon: BarChart3 },
     { id: "tasks", label: "Tasks", Icon: ClipboardCheck },
+    { id: "items", label: "Items", Icon: Package },
   ] as const;
   const financeNav = [
     { id: "quotations", label: "Quotations", Icon: FileText },
@@ -565,6 +574,7 @@ export default function Portal() {
     ],
     board: ["Workflow board", "See every active job at a glance."],
     tasks: ["Team tasks", "Work assigned across the administrative team."],
+    items: ["Items", "Create and view standard items and rates."],
     quotations: [
       "Quotations",
       "Create, send, print and convert customer quotations.",
@@ -640,6 +650,7 @@ export default function Portal() {
                   "quotations",
                   "invoices",
                   "expenses",
+                  "items",
                 ] as View[]
               ).includes(view) && (
                 <button className="primary" onClick={() => setEditing(null)}>
@@ -679,6 +690,16 @@ export default function Portal() {
         )}
         {view === "tasks" && (
           <Tasks tasks={tasks} jobs={filtered} profiles={profiles} open={setEditing} />
+        )}
+        {view === "items" && (
+          <Items
+            items={items}
+            canCreate={["super_admin", "admin"].includes(profile.role)}
+            demo={demo}
+            setItems={setItems}
+            reload={loadData}
+            show={show}
+          />
         )}
         {view === "quotations" && (
           <Documents
@@ -2923,6 +2944,132 @@ function UserAdmin({
     </>
   );
 }
+function Items({
+  items,
+  canCreate,
+  demo,
+  setItems,
+  reload,
+  show,
+}: {
+  items: Item[];
+  canCreate: boolean;
+  demo: boolean;
+  setItems: (items: Item[]) => void;
+  reload: () => Promise<void>;
+  show: (kind: "success" | "error", text: string) => void;
+}) {
+  const save = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const name = String(data.get("name") || "").trim();
+    const rate = Number(data.get("rate"));
+    const description = String(data.get("description") || "").trim();
+    if (!name) {
+      show("error", "Enter an item name");
+      return;
+    }
+    if (!Number.isFinite(rate) || rate < 0) {
+      show("error", "Enter a valid item rate");
+      return;
+    }
+    const duplicate = items.some(
+      (item) => item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase(),
+    );
+    if (duplicate) {
+      show("error", "This item already exists");
+      return;
+    }
+    try {
+      if (demo) {
+        setItems([
+          ...items,
+          {
+            id: crypto.randomUUID(),
+            name,
+            rate,
+            description: description || null,
+            created_at: new Date().toISOString(),
+          },
+        ].sort((a, b) => a.name.localeCompare(b.name)));
+      } else {
+        const { error } = await createClient().from("items").insert({
+          name,
+          rate,
+          description: description || null,
+        });
+        if (error) throw error;
+        await reload();
+      }
+      form.reset();
+      show("success", "Item created");
+    } catch (error) {
+      const duplicateError =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "23505";
+      show(
+        "error",
+        duplicateError
+          ? "This item already exists"
+          : error instanceof Error
+            ? error.message
+            : "Unable to create item",
+      );
+    }
+  };
+  return (
+    <>
+      {canCreate && (
+        <form className="itemAdd formGrid" onSubmit={save}>
+          <Field label="Item name">
+            <input name="name" required maxLength={160} />
+          </Field>
+          <Field label="Rate (MVR)">
+            <input name="rate" type="number" min="0" step="0.01" required />
+          </Field>
+          <Field label="Item description (optional)" wide>
+            <textarea name="description" rows={3} maxLength={2000} />
+          </Field>
+          <button className="primary" type="submit">
+            <Plus /> Create item
+          </button>
+        </form>
+      )}
+      {!canCreate && (
+        <div className="warning">Only administrators can create items.</div>
+      )}
+      <section className="sectionHead">
+        <h2>Item list</h2>
+        <span className="helper">{items.length} current items</span>
+      </section>
+      <div className="tableWrap responsiveTable">
+        <table>
+          <thead>
+            <tr>
+              <th>Item name</th>
+              <th>Rate</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td data-label="Item name"><strong>{item.name}</strong></td>
+                <td data-label="Rate">{money(item.rate)}</td>
+                <td data-label="Description">{item.description || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <div className="empty">No items created yet.</div>}
+      </div>
+    </>
+  );
+}
+
 function FactoryAdmin({
   factories,
   demo,
