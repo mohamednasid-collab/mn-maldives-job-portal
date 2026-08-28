@@ -259,6 +259,11 @@ type View =
   | "expenses"
   | "users"
   | "factories";
+type ProductionItemInput = { item_id: string; quantity: number };
+type JobSaveInput = Partial<Job> & {
+  production_items?: ProductionItemInput[];
+};
+type ProductionItemRow = { selection: string; quantity: number };
 type Notice = { kind: "success" | "error"; text: string } | null;
 
 export default function Portal() {
@@ -426,7 +431,7 @@ export default function Portal() {
       ),
     [jobs, search, status],
   );
-  async function saveJob(input: Partial<Job>) {
+  async function saveJob(input: JobSaveInput) {
     try {
       if (demo) {
         const assignee = profiles.find((p) => p.id === input.assigned_admin_id);
@@ -499,6 +504,17 @@ export default function Portal() {
         : sb.from("jobs").insert(payload);
       const { data: saved, error } = await q.select("id").single();
       if (error) throw error;
+      if (input.production_items?.length && saved?.id) {
+        const { error: itemError } = await sb.from("job_items").upsert(
+          input.production_items.map((item) => ({
+            job_id: saved.id,
+            item_id: item.item_id,
+            quantity: item.quantity,
+          })),
+          { onConflict: "job_id,item_id" },
+        );
+        if (itemError) throw itemError;
+      }
       setEditing(undefined);
       await loadData();
       if (input.status === "production" && saved?.id) {
@@ -784,6 +800,7 @@ export default function Portal() {
           currentUserId={profile.id}
           profiles={profiles}
           factories={factories}
+          items={items}
           canFinance={canFinance}
           canDelete={canDelete}
           onClose={() => setEditing(undefined)}
@@ -1582,6 +1599,7 @@ function JobDrawer({
   currentUserId,
   profiles,
   factories,
+  items,
   canFinance,
   canDelete,
   onClose,
@@ -1592,10 +1610,11 @@ function JobDrawer({
   currentUserId: string;
   profiles: Profile[];
   factories: FactoryRecord[];
+  items: Item[];
   canFinance: boolean;
   canDelete: boolean;
   onClose: () => void;
-  onSave: (j: Partial<Job>) => Promise<void>;
+  onSave: (j: JobSaveInput) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }) {
   const [form, setForm] = useState<Partial<Job>>(
@@ -1612,6 +1631,14 @@ function JobDrawer({
           amount_paid: 0,
         },
   );
+  const [productionOpen, setProductionOpen] = useState(false);
+  const [productionRows, setProductionRows] = useState<ProductionItemRow[]>([
+    { selection: "", quantity: 1 },
+  ]);
+  const [productionItems, setProductionItems] = useState<ProductionItemInput[]>(
+    [],
+  );
+  const [productionError, setProductionError] = useState("");
   const set = (k: keyof Job, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
   const available = factories.filter(
     (f) => f.active || f.id === form.factory_id,
@@ -1627,7 +1654,7 @@ function JobDrawer({
         className="drawer"
         onSubmit={(e: FormEvent) => {
           e.preventDefault();
-          void onSave(form);
+          void onSave({ ...form, production_items: productionItems });
         }}
       >
         <header>
@@ -1678,7 +1705,16 @@ function JobDrawer({
             <Field label="Status">
               <select
                 value={form.status}
-                onChange={(e) => set("status", e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value as JobStatus;
+                  if (next === "production" && form.status !== "production") {
+                    setProductionRows([{ selection: "", quantity: 1 }]);
+                    setProductionError("");
+                    setProductionOpen(true);
+                    return;
+                  }
+                  set("status", next);
+                }}
               >
                 {STATUSES.filter((s) => s !== "unpaid").map((s) => (
                   <option key={s} value={s}>
@@ -1799,6 +1835,157 @@ function JobDrawer({
           </button>
         </footer>
       </form>
+      {productionOpen && (
+        <div className="productionOverlay">
+          <form
+            className="smallModal productionModal"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const selected = productionRows.map((row) => ({
+                item: items.find((item) => {
+                  const option = `${item.code} — ${item.name}`;
+                  const value = row.selection.trim().toLocaleLowerCase();
+                  return (
+                    option.toLocaleLowerCase() === value ||
+                    item.code.toLocaleLowerCase() === value ||
+                    item.name.toLocaleLowerCase() === value
+                  );
+                }),
+                quantity: Number(row.quantity),
+              }));
+              if (selected.some(({ item }) => !item)) {
+                setProductionError("Select a valid item from the item list.");
+                return;
+              }
+              if (
+                selected.some(
+                  ({ quantity }) => !Number.isFinite(quantity) || quantity <= 0,
+                )
+              ) {
+                setProductionError("Enter a quantity greater than zero.");
+                return;
+              }
+              const ids = selected.map(({ item }) => item!.id);
+              if (new Set(ids).size !== ids.length) {
+                setProductionError("The same item cannot be added twice.");
+                return;
+              }
+              setProductionItems(
+                selected.map(({ item, quantity }) => ({
+                  item_id: item!.id,
+                  quantity,
+                })),
+              );
+              set("status", "production");
+              setProductionOpen(false);
+            }}
+          >
+            <header>
+              <div>
+                <span className="eyebrow">PRODUCTION ITEMS</span>
+                <h2>Select items and quantities</h2>
+              </div>
+              <button
+                type="button"
+                className="iconBtn"
+                onClick={() => setProductionOpen(false)}
+              >
+                <X />
+              </button>
+            </header>
+            <datalist id="production-item-options">
+              {items.map((item) => (
+                <option key={item.id} value={`${item.code} — ${item.name}`}>
+                  {money(item.rate)}
+                </option>
+              ))}
+            </datalist>
+            <div className="productionLines">
+              {productionRows.map((row, index) => (
+                <div className="productionLine" key={index}>
+                  <Field label="Item name">
+                    <input
+                      list="production-item-options"
+                      required
+                      placeholder="Search item code or name"
+                      value={row.selection}
+                      onChange={(e) =>
+                        setProductionRows((rows) =>
+                          rows.map((current, rowIndex) =>
+                            rowIndex === index
+                              ? { ...current, selection: e.target.value }
+                              : current,
+                          ),
+                        )
+                      }
+                    />
+                  </Field>
+                  <Field label="Quantity">
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      required
+                      value={row.quantity}
+                      onChange={(e) =>
+                        setProductionRows((rows) =>
+                          rows.map((current, rowIndex) =>
+                            rowIndex === index
+                              ? { ...current, quantity: Number(e.target.value) }
+                              : current,
+                          ),
+                        )
+                      }
+                    />
+                  </Field>
+                  {productionRows.length > 1 && (
+                    <button
+                      type="button"
+                      className="iconBtn"
+                      aria-label="Remove item"
+                      onClick={() =>
+                        setProductionRows((rows) =>
+                          rows.filter((_, rowIndex) => rowIndex !== index),
+                        )
+                      }
+                    >
+                      <Trash2 />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            {!items.length && (
+              <div className="warning">Create an item in Operations → Items first.</div>
+            )}
+            {productionError && <div className="warning">{productionError}</div>}
+            <button
+              className="secondary addProductionItem"
+              type="button"
+              onClick={() =>
+                setProductionRows((rows) => [
+                  ...rows,
+                  { selection: "", quantity: 1 },
+                ])
+              }
+            >
+              <Plus /> Add item
+            </button>
+            <footer>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setProductionOpen(false)}
+              >
+                Cancel
+              </button>
+              <button className="primary" type="submit" disabled={!items.length}>
+                Confirm production items
+              </button>
+            </footer>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
