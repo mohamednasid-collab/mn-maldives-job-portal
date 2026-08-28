@@ -253,6 +253,7 @@ type View =
   | "board"
   | "tasks"
   | "items"
+  | "customers"
   | "quotations"
   | "invoices"
   | "expenses"
@@ -414,6 +415,7 @@ export default function Portal() {
             [
               j.job_number,
               j.customer_name,
+              j.customer_email,
               j.description,
               j.invoice_number,
               j.assignee?.full_name,
@@ -476,6 +478,7 @@ export default function Portal() {
       const payload = {
         customer_name: input.customer_name,
         customer_phone: input.customer_phone || null,
+        customer_email: input.customer_email?.trim() || null,
         description: input.description,
         status: input.status,
         owner_id: input.owner_id || profile?.id,
@@ -552,6 +555,7 @@ export default function Portal() {
     { id: "board", label: "Status board", Icon: BarChart3 },
     { id: "tasks", label: "Tasks", Icon: ClipboardCheck },
     { id: "items", label: "Items", Icon: Package },
+    { id: "customers", label: "Customers", Icon: Users },
   ] as const;
   const financeNav = [
     { id: "quotations", label: "Quotations", Icon: FileText },
@@ -575,6 +579,10 @@ export default function Portal() {
     board: ["Workflow board", "See every active job at a glance."],
     tasks: ["Team tasks", "Work assigned across the administrative team."],
     items: ["Items", "Create and view standard items and rates."],
+    customers: [
+      "Customers",
+      "View customer jobs and outstanding invoice balances.",
+    ],
     quotations: [
       "Quotations",
       "Create, send, print and convert customer quotations.",
@@ -651,6 +659,7 @@ export default function Portal() {
                   "invoices",
                   "expenses",
                   "items",
+                  "customers",
                 ] as View[]
               ).includes(view) && (
                 <button className="primary" onClick={() => setEditing(null)}>
@@ -700,6 +709,9 @@ export default function Portal() {
             reload={loadData}
             show={show}
           />
+        )}
+        {view === "customers" && (
+          <Customers jobs={jobs} documents={documents} open={setEditing} />
         )}
         {view === "quotations" && (
           <Documents
@@ -1030,6 +1042,161 @@ function Dashboard({
         <Filters {...{ search, setSearch, status, setStatus }} />
       </section>
       <JobTable jobs={filtered} documents={documents} open={open} />
+    </>
+  );
+}
+function Customers({
+  jobs,
+  documents,
+  open,
+}: {
+  jobs: Job[];
+  documents: FinancialDocument[];
+  open: (job: Job) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const customers = useMemo(() => {
+    type CustomerGroup = {
+      key: string;
+      name: string;
+      email: string;
+      phone: string;
+      identities: Set<string>;
+      jobs: Job[];
+    };
+    const normalizeName = (value: string) =>
+      value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+    const normalizePhone = (value: string) => value.replace(/\D/g, "");
+    const groups: CustomerGroup[] = [];
+
+    for (const job of jobs) {
+      const email = job.customer_email?.trim() || "";
+      const phone = job.customer_phone?.trim() || "";
+      const identities = [
+        email && `email:${email.toLocaleLowerCase()}`,
+        phone && `phone:${normalizePhone(phone)}`,
+        `name:${normalizeName(job.customer_name)}`,
+      ].filter(Boolean) as string[];
+      const matches = groups.filter((group) =>
+        identities.some((identity) => group.identities.has(identity)),
+      );
+      if (!matches.length) {
+        groups.push({
+          key: identities[0],
+          name: job.customer_name,
+          email,
+          phone,
+          identities: new Set(identities),
+          jobs: [job],
+        });
+        continue;
+      }
+      const primary = matches[0];
+      primary.jobs.push(job);
+      identities.forEach((identity) => primary.identities.add(identity));
+      primary.email ||= email;
+      primary.phone ||= phone;
+      for (const duplicate of matches.slice(1)) {
+        duplicate.jobs.forEach((record) => primary.jobs.push(record));
+        duplicate.identities.forEach((identity) =>
+          primary.identities.add(identity),
+        );
+        primary.email ||= duplicate.email;
+        primary.phone ||= duplicate.phone;
+        groups.splice(groups.indexOf(duplicate), 1);
+      }
+    }
+
+    return groups
+      .map((customer) => {
+        const jobIds = new Set(customer.jobs.map((job) => job.id));
+        const activeJobs = customer.jobs.filter(
+          (job) => !["delivered", "completed"].includes(job.status),
+        );
+        const invoices = documents.filter(
+          (document) =>
+            document.document_type === "invoice" &&
+            ((document.job_id && jobIds.has(document.job_id)) ||
+              (!document.job_id &&
+                normalizeName(document.customer_name) ===
+                  normalizeName(customer.name))),
+        );
+        return {
+          ...customer,
+          activeJobs,
+          totalDue: invoices.reduce(
+            (total, invoice) =>
+              total +
+              Math.max(0, documentTotal(invoice) - Number(invoice.amount_paid)),
+            0,
+          ),
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [documents, jobs]);
+  const query = search.trim().toLocaleLowerCase();
+  const visible = customers.filter((customer) =>
+    !query ||
+    [
+      customer.name,
+      customer.email,
+      customer.phone,
+      ...customer.jobs.map((job) => job.job_number),
+    ]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(query),
+  );
+  return (
+    <>
+      <section className="sectionHead">
+        <h2>Customer list</h2>
+        <Filters search={search} setSearch={setSearch} />
+      </section>
+      <div className="tableWrap responsiveTable">
+        <table>
+          <thead>
+            <tr>
+              <th>Customer</th>
+              <th>Contact</th>
+              <th>Active jobs</th>
+              <th>Total due</th>
+              <th>Total jobs</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((customer) => (
+              <tr key={customer.key}>
+                <td data-label="Customer" className="customerCell">
+                  <strong>{customer.name}</strong>
+                </td>
+                <td data-label="Contact">
+                  <span className="customerContact">
+                    {customer.email && <span>{customer.email}</span>}
+                    {customer.phone && <span>{customer.phone}</span>}
+                    {!customer.email && !customer.phone && "—"}
+                  </span>
+                </td>
+                <td data-label="Active jobs">
+                  <span className="customerJobs">
+                    {customer.activeJobs.map((job) => (
+                      <button key={job.id} type="button" onClick={() => open(job)}>
+                        {job.job_number} · {labels[job.status]}
+                      </button>
+                    ))}
+                    {!customer.activeJobs.length && "—"}
+                  </span>
+                </td>
+                <td data-label="Total due">
+                  <strong>{money(customer.totalDue)}</strong>
+                </td>
+                <td data-label="Total jobs">{customer.jobs.length}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!visible.length && <div className="empty">No customers found.</div>}
+      </div>
     </>
   );
 }
@@ -1487,6 +1654,13 @@ function JobDrawer({
               <input
                 value={form.customer_phone || ""}
                 onChange={(e) => set("customer_phone", e.target.value)}
+              />
+            </Field>
+            <Field label="Email address (optional)">
+              <input
+                type="email"
+                value={form.customer_email || ""}
+                onChange={(e) => set("customer_email", e.target.value)}
               />
             </Field>
             <Field label="Job description" wide>

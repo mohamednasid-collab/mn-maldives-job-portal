@@ -11,7 +11,7 @@ export interface Payment { id: string; invoice_id: string; payment_date: string;
 export interface Expense { id: string; expense_number: string; expense_date: string; job_id: string | null; category: string; vendor: string | null; description: string; amount: number; payment_method: string | null; reference: string | null; notes: string | null; created_at: string; job?: { job_number: string } | null; }
 export interface Task { id: string; job_id: string; title: string; assigned_to: string | null; status: "todo" | "in_progress" | "done"; due_date: string | null; notification_sent_at: string | null; created_at: string; assignee?: { full_name: string } | null; job?: { job_number: string; customer_name: string } | null; }
 export interface Job {
-  id: string; job_number: string; customer_name: string; customer_phone: string | null;
+  id: string; job_number: string; customer_name: string; customer_phone: string | null; customer_email?: string | null;
   description: string; status: JobStatus; owner_id?: string | null; assigned_admin_id: string | null; designer_name: string | null;
   factory_id: string | null; next_task: string | null; created_at: string; updated_at: string;
   quotation_number: string | null; invoice_number: string | null; invoice_total: number;
