@@ -49,3 +49,7 @@
   .responsiveTable tr{grid-template-columns:1fr}.responsiveTable td,.responsiveTable td:nth-child(1),.responsiveTable .customerCell{grid-column:1}
   .mobileNav{height:66px}.mobileNav button{min-width:52px}
 }
+.jobItemsList{display:grid;gap:9px}
+.jobItemRow{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:14px;padding:12px 13px;border:1px solid var(--line);border-radius:11px;background:#f8fafb}
+.jobItemRow div{min-width:0}.jobItemRow div strong,.jobItemRow small{display:block}.jobItemRow small{color:var(--muted);margin-top:3px}.jobItemRow>span{color:var(--muted);white-space:nowrap}.jobItemRow>strong{white-space:nowrap}
+@media(max-width:700px){.jobItemRow{grid-template-columns:minmax(0,1fr) auto}.jobItemRow div{grid-column:1/-1}.jobItemRow>strong{text-align:right}}

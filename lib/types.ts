@@ -5,6 +5,7 @@ export type AppRole = "super_admin" | "admin" | "finance" | "staff";
 export interface Profile { id: string; full_name: string; email: string; role: AppRole; active: boolean; }
 export interface FactoryRecord { id: string; name: string; active: boolean; }
 export interface Item { id: string; code: string; name: string; rate: number; description: string | null; created_at: string; }
+export interface JobProductionItem { quantity: number; item: Pick<Item, "id" | "code" | "name" | "rate" | "description"> | null; }
 export interface DocumentItem { id?: string; description: string; detail: string | null; quantity: number; rate: number; position: number; }
 export interface FinancialDocument { id: string; document_type: "quotation" | "invoice"; document_number: string; status: "draft" | "sent"; source_quotation_id: string | null; job_id: string | null; customer_name: string; customer_address: string | null; subject: string | null; issue_date: string; due_date: string | null; terms: string; discount_percent: number; amount_paid: number; notes: string | null; created_at: string; items: DocumentItem[]; }
 export interface Payment { id: string; invoice_id: string; payment_date: string; amount: number; payment_method: string | null; reference: string | null; notes: string | null; created_at: string; invoice?: Pick<FinancialDocument, "id" | "document_number" | "customer_name" | "job_id" | "discount_percent" | "amount_paid" | "items"> | null; }
@@ -17,4 +18,5 @@ export interface Job {
   quotation_number: string | null; invoice_number: string | null; invoice_total: number;
   amount_paid: number; payment_status: "unpaid" | "part_paid" | "paid"; due_date: string | null;
   notes: string | null; owner?: { full_name: string } | null; assignee?: { full_name: string } | null; factory?: { name: string } | null;
+  production_items?: JobProductionItem[];
 }

@@ -260,7 +260,7 @@ type View =
   | "users"
   | "factories";
 type ProductionItemInput = { item_id: string; quantity: number };
-type JobSaveInput = Partial<Job> & {
+type JobSaveInput = Omit<Partial<Job>, "production_items"> & {
   production_items?: ProductionItemInput[];
 };
 type ProductionItemRow = { selection: string; quantity: number };
@@ -339,7 +339,7 @@ export default function Portal() {
       sb
         .from("jobs")
         .select(
-          "*,owner:profiles!jobs_owner_id_fkey(full_name),assignee:profiles!jobs_assigned_admin_id_fkey(full_name),factory:factories(name)",
+          "*,owner:profiles!jobs_owner_id_fkey(full_name),assignee:profiles!jobs_assigned_admin_id_fkey(full_name),factory:factories(name),production_items:job_items(quantity,item:items(id,code,name,rate,description))",
         )
         .order("created_at", { ascending: false }),
       sb
@@ -1643,6 +1643,12 @@ function JobDrawer({
   const available = factories.filter(
     (f) => f.active || f.id === form.factory_id,
   );
+  const visibleProductionItems = productionItems.length
+    ? productionItems.map((line) => ({
+        quantity: line.quantity,
+        item: items.find((item) => item.id === line.item_id) || null,
+      }))
+    : job?.production_items || [];
   return (
     <div
       className="modal"
@@ -1776,6 +1782,33 @@ function JobDrawer({
             </Field>
           </div>
         </FormSection>
+        {(form.status === "production" || visibleProductionItems.length > 0) && (
+          <FormSection title="Items">
+            {visibleProductionItems.length ? (
+              <div className="jobItemsList">
+                {visibleProductionItems.map((line, index) => (
+                  <article
+                    className="jobItemRow"
+                    key={`${line.item?.id || "item"}-${index}`}
+                  >
+                    <div>
+                      <strong>
+                        {line.item?.code || "—"} · {line.item?.name || "Unknown item"}
+                      </strong>
+                      {line.item?.description && (
+                        <small>{line.item.description}</small>
+                      )}
+                    </div>
+                    <span>Qty {Number(line.quantity).toLocaleString()}</span>
+                    <strong>{money(Number(line.item?.rate || 0))}</strong>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="warning">No production items selected.</div>
+            )}
+          </FormSection>
+        )}
         <FormSection title="Quotation, invoice & due date">
           <div className="warning">
             Delivered jobs move to Completed only when an invoice number exists.
