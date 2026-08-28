@@ -362,7 +362,7 @@ export default function Portal() {
           "*,assignee:profiles!tasks_assigned_to_fkey(full_name),job:jobs(job_number,customer_name)",
         )
         .order("created_at", { ascending: false }),
-      sb.from("items").select("id,name,rate,description,created_at").order("name"),
+      sb.from("items").select("id,code,name,rate,description,created_at").order("name"),
     ]);
     if (je) throw je;
     if (pe) throw pe;
@@ -2963,9 +2963,14 @@ function Items({
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
+    const code = String(data.get("code") || "").trim();
     const name = String(data.get("name") || "").trim();
     const rate = Number(data.get("rate"));
     const description = String(data.get("description") || "").trim();
+    if (!code) {
+      show("error", "Enter an item code");
+      return;
+    }
     if (!name) {
       show("error", "Enter an item name");
       return;
@@ -2974,11 +2979,18 @@ function Items({
       show("error", "Enter a valid item rate");
       return;
     }
-    const duplicate = items.some(
+    const duplicateCode = items.some(
+      (item) => item.code.trim().toLocaleLowerCase() === code.toLocaleLowerCase(),
+    );
+    if (duplicateCode) {
+      show("error", "This item code already exists");
+      return;
+    }
+    const duplicateName = items.some(
       (item) => item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase(),
     );
-    if (duplicate) {
-      show("error", "This item already exists");
+    if (duplicateName) {
+      show("error", "This item name already exists");
       return;
     }
     try {
@@ -2987,6 +2999,7 @@ function Items({
           ...items,
           {
             id: crypto.randomUUID(),
+            code,
             name,
             rate,
             description: description || null,
@@ -2995,6 +3008,7 @@ function Items({
         ].sort((a, b) => a.name.localeCompare(b.name)));
       } else {
         const { error } = await createClient().from("items").insert({
+          code,
           name,
           rate,
           description: description || null,
@@ -3024,6 +3038,9 @@ function Items({
     <>
       {canCreate && (
         <form className="itemAdd formGrid" onSubmit={save}>
+          <Field label="Item code">
+            <input name="code" required maxLength={50} />
+          </Field>
           <Field label="Item name">
             <input name="name" required maxLength={160} />
           </Field>
@@ -3049,6 +3066,7 @@ function Items({
         <table>
           <thead>
             <tr>
+              <th>Item code</th>
               <th>Item name</th>
               <th>Rate</th>
               <th>Description</th>
@@ -3057,6 +3075,7 @@ function Items({
           <tbody>
             {items.map((item) => (
               <tr key={item.id}>
+                <td data-label="Item code"><strong className="jobNo">{item.code}</strong></td>
                 <td data-label="Item name"><strong>{item.name}</strong></td>
                 <td data-label="Rate">{money(item.rate)}</td>
                 <td data-label="Description">{item.description || "—"}</td>
