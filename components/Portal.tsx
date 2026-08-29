@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useId, useMemo, useState } from "react";
 import {
   BarChart3,
   BriefcaseBusiness,
@@ -756,6 +756,7 @@ export default function Portal() {
             documents={documents}
             payments={payments}
             jobs={jobs}
+            catalogItems={items}
             demo={demo}
             reload={loadData}
             show={show}
@@ -767,6 +768,7 @@ export default function Portal() {
             documents={documents}
             payments={payments}
             jobs={jobs}
+            catalogItems={items}
             demo={demo}
             reload={loadData}
             show={show}
@@ -2196,11 +2198,70 @@ function Field({
   );
 }
 
+function CatalogItemInput({
+  itemId,
+  fallbackLabel,
+  catalogItems,
+  onSelect,
+}: {
+  itemId?: string | null;
+  fallbackLabel?: string;
+  catalogItems: Item[];
+  onSelect: (item: Item) => void;
+}) {
+  const listId = useId();
+  const selected = catalogItems.find((item) => item.id === itemId);
+  const [query, setQuery] = useState(fallbackLabel || "");
+  const choose = (value: string) => {
+    const normalized = value.trim().toLocaleLowerCase();
+    const match = catalogItems.find(
+      (item) =>
+        `${item.code} — ${item.name}`.toLocaleLowerCase() === normalized ||
+        item.code.toLocaleLowerCase() === normalized ||
+        item.name.toLocaleLowerCase() === normalized,
+    );
+    if (match) onSelect(match);
+  };
+  if (selected) {
+    return (
+      <input
+        className="catalogItemLocked"
+        value={`${selected.code} — ${selected.name}`}
+        aria-label="Item"
+        readOnly
+        title="Remove this row to select a different item"
+      />
+    );
+  }
+  return (
+    <>
+      <input
+        list={listId}
+        required
+        value={query}
+        aria-label="Item"
+        placeholder="Search item code or name"
+        onChange={(event) => {
+          setQuery(event.target.value);
+          choose(event.target.value);
+        }}
+        onBlur={(event) => choose(event.target.value)}
+      />
+      <datalist id={listId}>
+        {catalogItems.map((item) => (
+          <option key={item.id} value={`${item.code} — ${item.name}`} />
+        ))}
+      </datalist>
+    </>
+  );
+}
+
 function Documents({
   mode,
   documents,
   payments,
   jobs,
+  catalogItems,
   demo,
   reload,
   show,
@@ -2209,6 +2270,7 @@ function Documents({
   documents: FinancialDocument[];
   payments: Payment[];
   jobs: Job[];
+  catalogItems: Item[];
   demo: boolean;
   reload: () => Promise<void>;
   show: (k: "success" | "error", t: string) => void;
@@ -2223,7 +2285,7 @@ function Documents({
     (document) => document.document_type === mode,
   );
   const [items, setItems] = useState<DocumentItem[]>([
-    { description: "", detail: null, quantity: 1, rate: 0, position: 1 },
+    { item_id: null, description: "", detail: null, quantity: 1, rate: 0, position: 1 },
   ]);
   const subtotal = items.reduce(
     (a, i) => a + Number(i.quantity) * Number(i.rate),
@@ -2239,7 +2301,7 @@ function Documents({
   const reset = () => {
     setOpen(false);
     setItems([
-      { description: "", detail: null, quantity: 1, rate: 0, position: 1 },
+      { item_id: null, description: "", detail: null, quantity: 1, rate: 0, position: 1 },
     ]);
   };
   const save = async (e: FormEvent<HTMLFormElement>) => {
@@ -2249,6 +2311,10 @@ function Documents({
       if (demo) {
         show("success", "Document simulated in preview mode");
         reset();
+        return;
+      }
+      if (!items.length || items.some((item) => !item.item_id)) {
+        show("error", "Select every invoice item from the Items database");
         return;
       }
       const sb = createClient();
@@ -2277,6 +2343,7 @@ function Documents({
         .insert(
           items.map((i, index) => ({
             document_id: doc.id,
+            item_id: i.item_id,
             position: index + 1,
             description: i.description,
             detail: i.detail || null,
@@ -2669,18 +2736,31 @@ function Documents({
             </FormSection>
             <FormSection title="Items">
               <div className="lineItems">
+                <div className="lineItemHeaders" aria-hidden="true">
+                  <span>Item</span>
+                  <span>Description</span>
+                  <span>Qty</span>
+                  <span>Rate</span>
+                  <span />
+                </div>
                 {items.map((item, index) => (
                   <div className="lineItem" key={index}>
-                    <input
-                      required
-                      placeholder="Description"
-                      value={item.description}
-                      onChange={(e) =>
+                    <CatalogItemInput
+                      itemId={item.item_id}
+                      fallbackLabel={item.description}
+                      catalogItems={catalogItems}
+                      onSelect={(selected) =>
                         setItems(
-                          items.map((x, i) =>
-                            i === index
-                              ? { ...x, description: e.target.value }
-                              : x,
+                          items.map((current, itemIndex) =>
+                            itemIndex === index
+                              ? {
+                                  ...current,
+                                  item_id: selected.id,
+                                  description: `${selected.code} - ${selected.name}`,
+                                  detail: current.detail || selected.description,
+                                  rate: Number(selected.rate),
+                                }
+                              : current,
                           ),
                         )
                       }
@@ -2729,7 +2809,6 @@ function Documents({
                     <button
                       type="button"
                       className="iconBtn"
-                      disabled={items.length === 1}
                       onClick={() =>
                         setItems(items.filter((_, i) => i !== index))
                       }
@@ -2746,6 +2825,7 @@ function Documents({
                   setItems([
                     ...items,
                     {
+                      item_id: null,
                       description: "",
                       detail: null,
                       quantity: 1,
@@ -2780,6 +2860,7 @@ function Documents({
         <DocumentEditor
           document={editingDoc}
           jobs={jobs}
+          catalogItems={catalogItems}
           demo={demo}
           onClose={() => setEditingDoc(null)}
           reload={reload}
@@ -2889,6 +2970,7 @@ function DocumentViewer({
 function DocumentEditor({
   document,
   jobs,
+  catalogItems,
   demo,
   onClose,
   reload,
@@ -2896,6 +2978,7 @@ function DocumentEditor({
 }: {
   document: FinancialDocument;
   jobs: Job[];
+  catalogItems: Item[];
   demo: boolean;
   onClose: () => void;
   reload: () => Promise<void>;
@@ -2915,6 +2998,10 @@ function DocumentEditor({
       if (demo) {
         show("success", "Document edit simulated in preview mode");
         onClose();
+        return;
+      }
+      if (!items.length || items.some((item) => !item.item_id)) {
+        show("error", "Select every invoice item from the Items database");
         return;
       }
       const sb = createClient();
@@ -2943,6 +3030,7 @@ function DocumentEditor({
         .insert(
           items.map((i, index) => ({
             document_id: document.id,
+            item_id: i.item_id,
             position: index + 1,
             description: i.description,
             detail: i.detail || null,
@@ -2956,6 +3044,7 @@ function DocumentEditor({
           .insert(
             document.items.map((i, index) => ({
               document_id: document.id,
+              item_id: i.item_id,
               position: index + 1,
               description: i.description,
               detail: i.detail || null,
@@ -3060,16 +3149,31 @@ function DocumentEditor({
         </FormSection>
         <FormSection title="Items">
           <div className="lineItems">
+            <div className="lineItemHeaders" aria-hidden="true">
+              <span>Item</span>
+              <span>Description</span>
+              <span>Qty</span>
+              <span>Rate</span>
+              <span />
+            </div>
             {items.map((item, index) => (
               <div className="lineItem" key={index}>
-                <input
-                  required
-                  placeholder="Description"
-                  value={item.description}
-                  onChange={(e) =>
+                <CatalogItemInput
+                  itemId={item.item_id}
+                  fallbackLabel={item.description}
+                  catalogItems={catalogItems}
+                  onSelect={(selected) =>
                     setItems(
-                      items.map((x, i) =>
-                        i === index ? { ...x, description: e.target.value } : x,
+                      items.map((current, itemIndex) =>
+                        itemIndex === index
+                          ? {
+                              ...current,
+                              item_id: selected.id,
+                              description: `${selected.code} - ${selected.name}`,
+                              detail: current.detail || selected.description,
+                              rate: Number(selected.rate),
+                            }
+                          : current,
                       ),
                     )
                   }
@@ -3116,7 +3220,6 @@ function DocumentEditor({
                 <button
                   type="button"
                   className="iconBtn"
-                  disabled={items.length === 1}
                   onClick={() => setItems(items.filter((_, i) => i !== index))}
                 >
                   <Trash2 />
@@ -3131,6 +3234,7 @@ function DocumentEditor({
               setItems([
                 ...items,
                 {
+                  item_id: null,
                   description: "",
                   detail: null,
                   quantity: 1,
