@@ -837,6 +837,7 @@ export default function Portal() {
           <Documents
             mode="quotation"
             documents={documents}
+            setDocuments={setDocuments}
             payments={payments}
             jobs={jobs}
             catalogItems={items}
@@ -849,6 +850,7 @@ export default function Portal() {
           <Documents
             mode="invoice"
             documents={documents}
+            setDocuments={setDocuments}
             payments={payments}
             jobs={jobs}
             catalogItems={items}
@@ -2445,6 +2447,7 @@ function CatalogItemInput({
 function Documents({
   mode,
   documents,
+  setDocuments,
   payments,
   jobs,
   catalogItems,
@@ -2454,6 +2457,7 @@ function Documents({
 }: {
   mode: "quotation" | "invoice";
   documents: FinancialDocument[];
+  setDocuments: React.Dispatch<React.SetStateAction<FinancialDocument[]>>;
   payments: Payment[];
   jobs: Job[];
   catalogItems: Item[];
@@ -2559,12 +2563,28 @@ function Documents({
     status: "draft" | "sent",
   ) => {
     try {
-      if (!demo) {
-        const { error } = await createClient()
+      if (demo) {
+        setDocuments((current) =>
+          current.map((document) =>
+            document.id === d.id ? { ...document, status } : document,
+          ),
+        );
+      } else {
+        const { data, error } = await createClient()
           .from("financial_documents")
           .update({ status })
-          .eq("id", d.id);
+          .eq("id", d.id)
+          .select("id,status")
+          .single();
         if (error) throw error;
+        if (!data || data.status !== status) {
+          throw new Error("The invoice status was not saved. Please try again.");
+        }
+        setDocuments((current) =>
+          current.map((document) =>
+            document.id === d.id ? { ...document, status: data.status } : document,
+          ),
+        );
         await reload();
       }
       show("success", `${d.document_number} marked ${status}`);
