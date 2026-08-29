@@ -1737,6 +1737,13 @@ function JobDrawer({
                 onChange={(e) => set("description", e.target.value)}
               />
             </Field>
+            <Field label="Internal notes" wide>
+              <textarea
+                rows={3}
+                value={form.notes || ""}
+                onChange={(e) => set("notes", e.target.value)}
+              />
+            </Field>
           </div>
         </FormSection>
         <FormSection title="Workflow & assignment">
@@ -1869,13 +1876,6 @@ function JobDrawer({
               fields.
             </small>
           )}
-          <Field label="Internal notes" wide>
-            <textarea
-              rows={3}
-              value={form.notes || ""}
-              onChange={(e) => set("notes", e.target.value)}
-            />
-          </Field>
           {form.status === "cancelled" && (
             <div className="cancelledReason">
               <strong>Cancellation reason</strong>
