@@ -218,6 +218,7 @@ const labels: Record<string, string> = {
   delivered: "Delivered",
   unpaid: "Unpaid",
   incomplete: "Incomplete",
+  cancelled: "Cancelled",
   completed: "Completed",
   part_paid: "Part-paid",
   paid: "Paid",
@@ -421,6 +422,7 @@ export default function Portal() {
               j.job_number,
               j.customer_name,
               j.customer_email,
+              j.contact_person,
               j.description,
               j.invoice_number,
               j.assignee?.full_name,
@@ -484,6 +486,7 @@ export default function Portal() {
         customer_name: input.customer_name,
         customer_phone: input.customer_phone || null,
         customer_email: input.customer_email?.trim() || null,
+        contact_person: input.contact_person?.trim() || null,
         description: input.description,
         status: input.status,
         owner_id: input.owner_id || profile?.id,
@@ -498,6 +501,7 @@ export default function Portal() {
         payment_status: input.payment_status,
         due_date: input.due_date || null,
         notes: input.notes || null,
+        cancellation_reason: input.cancellation_reason?.trim() || null,
       };
       const q = input.id
         ? sb.from("jobs").update(payload).eq("id", input.id)
@@ -1026,7 +1030,11 @@ function Dashboard({
       <div className="stats five">
         <Stat
           label="Active jobs"
-          value={jobs.filter((j) => j.status !== "completed").length}
+          value={
+            jobs.filter(
+              (job) => !["completed", "cancelled"].includes(job.status),
+            ).length
+          }
           Icon={BriefcaseBusiness}
         />
         <Stat
@@ -1058,7 +1066,13 @@ function Dashboard({
         <h2>Recent jobs</h2>
         <Filters {...{ search, setSearch, status, setStatus }} />
       </section>
-      <JobTable jobs={filtered} documents={documents} open={open} />
+      <JobTable
+        jobs={filtered.filter(
+          (job) => !["completed", "cancelled"].includes(job.status),
+        )}
+        documents={documents}
+        open={open}
+      />
     </>
   );
 }
@@ -1307,6 +1321,7 @@ function Board({
     (status) =>
       status !== "delivered" &&
       status !== "unpaid" &&
+      status !== "cancelled" &&
       status !== "completed",
   );
   return (
@@ -1639,6 +1654,11 @@ function JobDrawer({
     [],
   );
   const [productionError, setProductionError] = useState("");
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancellationReason, setCancellationReason] = useState(
+    job?.cancellation_reason || "",
+  );
+  const [cancellationError, setCancellationError] = useState("");
   const set = (k: keyof Job, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
   const available = factories.filter(
     (f) => f.active || f.id === form.factory_id,
@@ -1696,6 +1716,12 @@ function JobDrawer({
                 onChange={(e) => set("customer_email", e.target.value)}
               />
             </Field>
+            <Field label="Contact person">
+              <input
+                value={form.contact_person || ""}
+                onChange={(e) => set("contact_person", e.target.value)}
+              />
+            </Field>
             <Field label="Job description" wide>
               <textarea
                 required
@@ -1722,11 +1748,16 @@ function JobDrawer({
                   set("status", next);
                 }}
               >
-                {STATUSES.filter((s) => s !== "unpaid").map((s) => (
+                {STATUSES.filter(
+                  (s) => s !== "unpaid" && s !== "cancelled",
+                ).map((s) => (
                   <option key={s} value={s}>
                     {labels[s]}
                   </option>
                 ))}
+                {form.status === "cancelled" && (
+                  <option value="cancelled">Cancelled</option>
+                )}
               </select>
             </Field>
             <Field label="Assign administrator">
@@ -1793,14 +1824,11 @@ function JobDrawer({
                   >
                     <div>
                       <strong>
-                        {line.item?.code || "—"} · {line.item?.name || "Unknown item"}
+                        {line.item?.code || "—"} ·{" "}
+                        {line.item?.name || "Unknown item"}
                       </strong>
-                      {line.item?.description && (
-                        <small>{line.item.description}</small>
-                      )}
                     </div>
                     <span>Qty {Number(line.quantity).toLocaleString()}</span>
-                    <strong>{money(Number(line.item?.rate || 0))}</strong>
                   </article>
                 ))}
               </div>
@@ -1848,6 +1876,12 @@ function JobDrawer({
               onChange={(e) => set("notes", e.target.value)}
             />
           </Field>
+          {form.status === "cancelled" && (
+            <div className="cancelledReason">
+              <strong>Cancellation reason</strong>
+              <span>{form.cancellation_reason}</span>
+            </div>
+          )}
         </FormSection>
         <footer>
           {job && canDelete && (
@@ -1859,6 +1893,19 @@ function JobDrawer({
               Delete
             </button>
           )}
+          {job && !["completed", "cancelled"].includes(job.status) && (
+            <button
+              className="danger"
+              type="button"
+              onClick={() => {
+                setCancellationReason("");
+                setCancellationError("");
+                setCancelOpen(true);
+              }}
+            >
+              Cancel job
+            </button>
+          )}
           <span />
           <button className="secondary" type="button" onClick={onClose}>
             Cancel
@@ -1868,6 +1915,60 @@ function JobDrawer({
           </button>
         </footer>
       </form>
+      {cancelOpen && (
+        <div className="productionOverlay">
+          <form
+            className="smallModal"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const reason = cancellationReason.trim();
+              if (!reason) {
+                setCancellationError("Enter a reason for cancelling this job.");
+                return;
+              }
+              setCancelOpen(false);
+              void onSave({
+                ...form,
+                status: "cancelled",
+                cancellation_reason: reason,
+                production_items: productionItems,
+              });
+            }}
+          >
+            <header>
+              <div>
+                <span className="eyebrow">CANCEL JOB</span>
+                <h2>Why is this job being cancelled?</h2>
+              </div>
+              <button
+                type="button"
+                className="iconBtn"
+                onClick={() => setCancelOpen(false)}
+              >
+                <X />
+              </button>
+            </header>
+            <Field label="Cancellation reason">
+              <textarea
+                autoFocus
+                required
+                rows={4}
+                value={cancellationReason}
+                onChange={(event) => {
+                  setCancellationReason(event.target.value);
+                  setCancellationError("");
+                }}
+              />
+            </Field>
+            {cancellationError && (
+              <div className="warning">{cancellationError}</div>
+            )}
+            <button className="danger cancelConfirm" type="submit">
+              Confirm cancellation
+            </button>
+          </form>
+        </div>
+      )}
       {productionOpen && (
         <div className="productionOverlay">
           <form
