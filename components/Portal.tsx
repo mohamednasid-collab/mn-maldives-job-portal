@@ -15,6 +15,7 @@ import {
   LogOut,
   Menu,
   Package,
+  Pencil,
   Plus,
   Printer,
   Receipt,
@@ -3888,6 +3889,7 @@ function Items({
   reload: () => Promise<void>;
   show: (kind: "success" | "error", text: string) => void;
 }) {
+  const [editingItem, setEditingItem] = useState<Item | null>(null);
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -3963,6 +3965,75 @@ function Items({
       );
     }
   };
+  const updateItem = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!editingItem) return;
+    const data = new FormData(event.currentTarget);
+    const code = String(data.get("code") || "").trim();
+    const name = String(data.get("name") || "").trim();
+    const rate = Number(data.get("rate"));
+    const description = String(data.get("description") || "").trim();
+    if (!code || !name || !Number.isFinite(rate) || rate < 0) {
+      show("error", "Enter a valid item code, name and rate");
+      return;
+    }
+    if (
+      items.some(
+        (item) =>
+          item.id !== editingItem.id &&
+          item.code.trim().toLocaleLowerCase() === code.toLocaleLowerCase(),
+      )
+    ) {
+      show("error", "This item code already exists");
+      return;
+    }
+    if (
+      items.some(
+        (item) =>
+          item.id !== editingItem.id &&
+          item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase(),
+      )
+    ) {
+      show("error", "This item name already exists");
+      return;
+    }
+    try {
+      if (demo) {
+        setItems(
+          items
+            .map((item) =>
+              item.id === editingItem.id
+                ? { ...item, code, name, rate, description: description || null }
+                : item,
+            )
+            .sort((a, b) => a.name.localeCompare(b.name)),
+        );
+      } else {
+        const { error } = await createClient()
+          .from("items")
+          .update({ code, name, rate, description: description || null })
+          .eq("id", editingItem.id);
+        if (error) throw error;
+        await reload();
+      }
+      setEditingItem(null);
+      show("success", "Item updated");
+    } catch (error) {
+      const duplicateError =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "23505";
+      show(
+        "error",
+        duplicateError
+          ? "This item code or name already exists"
+          : error instanceof Error
+            ? error.message
+            : "Unable to update item",
+      );
+    }
+  };
   return (
     <>
       {canCreate && (
@@ -3999,6 +4070,7 @@ function Items({
               <th>Item name</th>
               <th>Rate</th>
               <th>Description</th>
+              {canCreate && <th>Action</th>}
             </tr>
           </thead>
           <tbody>
@@ -4008,12 +4080,57 @@ function Items({
                 <td data-label="Item name"><strong>{item.name}</strong></td>
                 <td data-label="Rate">{money(item.rate)}</td>
                 <td data-label="Description">{item.description || "—"}</td>
+                {canCreate && (
+                  <td data-label="Action">
+                    <button
+                      type="button"
+                      className="secondary compact"
+                      onClick={() => setEditingItem(item)}
+                    >
+                      <Pencil /> Edit
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
         </table>
         {!items.length && <div className="empty">No items created yet.</div>}
       </div>
+      {editingItem && (
+        <div className="modal">
+          <form className="smallModal" onSubmit={updateItem}>
+            <header>
+              <div>
+                <span className="eyebrow">EDIT ITEM</span>
+                <h2>{editingItem.code} · {editingItem.name}</h2>
+              </div>
+              <button
+                type="button"
+                className="iconBtn"
+                onClick={() => setEditingItem(null)}
+              >
+                <X />
+              </button>
+            </header>
+            <Field label="Item code">
+              <input name="code" required maxLength={50} defaultValue={editingItem.code} />
+            </Field>
+            <Field label="Item name">
+              <input name="name" required maxLength={160} defaultValue={editingItem.name} />
+            </Field>
+            <Field label="Rate (MVR)">
+              <input name="rate" type="number" min="0" step="0.01" required defaultValue={editingItem.rate} />
+            </Field>
+            <Field label="Item description (optional)">
+              <textarea name="description" rows={3} maxLength={2000} defaultValue={editingItem.description || ""} />
+            </Field>
+            <button className="primary customerCreate" type="submit">
+              Save item changes
+            </button>
+          </form>
+        </div>
+      )}
     </>
   );
 }
