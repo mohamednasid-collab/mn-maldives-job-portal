@@ -555,6 +555,11 @@ export default function Portal() {
         return;
       }
       const sb = createClient();
+      const previousJob = input.id
+        ? jobs.find((job) => job.id === input.id)
+        : undefined;
+      const enteredProduction =
+        input.status === "production" && previousJob?.status !== "production";
       const payload = {
         customer_id: input.customer_id,
         customer_name: input.customer_name,
@@ -594,7 +599,7 @@ export default function Portal() {
         if (itemError) throw itemError;
       }
       let automaticInvoiceNumber: string | undefined;
-      if (input.status === "production" && saved?.id) {
+      if (enteredProduction && saved?.id) {
         const { data: invoice, error: invoiceError } = await sb.rpc(
           "create_production_invoice",
           { target_job_id: saved.id },
@@ -604,7 +609,7 @@ export default function Portal() {
       }
       setEditing(undefined);
       await loadData();
-      if (input.status === "production" && saved?.id) {
+      if (enteredProduction && saved?.id) {
         const response = await fetch("/api/notifications/finance", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
