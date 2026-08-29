@@ -27,6 +27,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import {
   AppRole,
+  Customer,
   DocumentItem,
   Expense,
   FactoryRecord,
@@ -210,6 +211,21 @@ const demoFactories: FactoryRecord[] = [
   "CAPTAIN",
   "INC9000",
 ].map((name) => ({ id: name.toLowerCase(), name, active: true }));
+const demoCustomers: Customer[] = Array.from(
+  new Map(
+    demoJobs.map((job) => [
+      job.customer_name.toLocaleLowerCase(),
+      {
+        id: `demo-${job.id}`,
+        name: job.customer_name,
+        phone: job.customer_phone,
+        email: job.customer_email || null,
+        contact_person: job.contact_person || null,
+        created_at: job.created_at,
+      },
+    ]),
+  ).values(),
+);
 const labels: Record<string, string> = {
   initial: "Initial",
   design: "Design",
@@ -281,6 +297,9 @@ export default function Portal() {
     demo ? demoFactories : [],
   );
   const [items, setItems] = useState<Item[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>(
+    demo ? demoCustomers : [],
+  );
   const [documents, setDocuments] = useState<FinancialDocument[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -338,6 +357,7 @@ export default function Portal() {
       { data: y, error: ye },
       { data: t, error: te },
       { data: i, error: ie },
+      { data: c, error: ce },
     ] = await Promise.all([
       sb
         .from("jobs")
@@ -372,6 +392,10 @@ export default function Portal() {
         )
         .order("created_at", { ascending: false }),
       sb.from("items").select("id,code,name,rate,description,created_at").order("name"),
+      sb
+        .from("customers")
+        .select("id,name,phone,email,contact_person,created_at")
+        .order("name"),
     ]);
     if (je) throw je;
     if (pe) throw pe;
@@ -381,6 +405,7 @@ export default function Portal() {
     if (ye) throw ye;
     if (te) throw te;
     if (ie) throw ie;
+    if (ce) throw ce;
     setJobs((j || []) as unknown as Job[]);
     setProfiles((p || []) as Profile[]);
     setFactories((f || []) as FactoryRecord[]);
@@ -389,6 +414,7 @@ export default function Portal() {
     setPayments((y || []) as unknown as Payment[]);
     setTasks((t || []) as unknown as Task[]);
     setItems((i || []) as unknown as Item[]);
+    setCustomers((c || []) as Customer[]);
   }
   function show(
     kind: Notice extends infer _ ? "success" | "error" : "success",
@@ -435,6 +461,51 @@ export default function Portal() {
       ),
     [jobs, search, status],
   );
+  async function createCustomer(input: {
+    name: string;
+    phone: string;
+    email: string;
+    contact_person: string;
+  }) {
+    const normalized = input.name.trim().toLocaleLowerCase();
+    const existing = customers.find(
+      (customer) => customer.name.trim().toLocaleLowerCase() === normalized,
+    );
+    if (existing) throw new Error("This customer already exists. Select them from the list.");
+    const payload = {
+      name: input.name.trim(),
+      phone: input.phone.trim() || null,
+      email: input.email.trim() || null,
+      contact_person: input.contact_person.trim() || null,
+    };
+    if (demo) {
+      const customer: Customer = {
+        id: crypto.randomUUID(),
+        ...payload,
+        created_at: new Date().toISOString(),
+      };
+      setCustomers((current) =>
+        [...current, customer].sort((a, b) => a.name.localeCompare(b.name)),
+      );
+      return customer;
+    }
+    const { data, error } = await createClient()
+      .from("customers")
+      .insert(payload)
+      .select("id,name,phone,email,contact_person,created_at")
+      .single();
+    if (error) {
+      if (error.code === "23505") {
+        throw new Error("This customer already exists. Select them from the list.");
+      }
+      throw error;
+    }
+    const customer = data as Customer;
+    setCustomers((current) =>
+      [...current, customer].sort((a, b) => a.name.localeCompare(b.name)),
+    );
+    return customer;
+  }
   async function saveJob(input: JobSaveInput) {
     try {
       if (demo) {
@@ -485,6 +556,7 @@ export default function Portal() {
       }
       const sb = createClient();
       const payload = {
+        customer_id: input.customer_id,
         customer_name: input.customer_name,
         customer_phone: input.customer_phone || null,
         customer_email: input.customer_email?.trim() || null,
@@ -748,7 +820,12 @@ export default function Portal() {
           />
         )}
         {view === "customers" && (
-          <Customers jobs={jobs} documents={documents} open={setEditing} />
+          <Customers
+            customers={customers}
+            jobs={jobs}
+            documents={documents}
+            open={setEditing}
+          />
         )}
         {view === "quotations" && (
           <Documents
@@ -824,10 +901,12 @@ export default function Portal() {
           profiles={profiles}
           factories={factories}
           items={items}
+          customers={customers}
           canFinance={canFinance}
           canDelete={canDelete}
           onClose={() => setEditing(undefined)}
           onSave={saveJob}
+          onCreateCustomer={createCustomer}
           onDelete={removeJob}
         />
       )}
@@ -1105,72 +1184,32 @@ function Dashboard({
   );
 }
 function Customers({
+  customers,
   jobs,
   documents,
   open,
 }: {
+  customers: Customer[];
   jobs: Job[];
   documents: FinancialDocument[];
   open: (job: Job) => void;
 }) {
   const [search, setSearch] = useState("");
-  const customers = useMemo(() => {
-    type CustomerGroup = {
-      key: string;
-      name: string;
-      email: string;
-      phone: string;
-      identities: Set<string>;
-      jobs: Job[];
-    };
+  const customerRows = useMemo(() => {
     const normalizeName = (value: string) =>
       value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
-    const normalizePhone = (value: string) => value.replace(/\D/g, "");
-    const groups: CustomerGroup[] = [];
-
-    for (const job of jobs) {
-      const email = job.customer_email?.trim() || "";
-      const phone = job.customer_phone?.trim() || "";
-      const identities = [
-        email && `email:${email.toLocaleLowerCase()}`,
-        phone && `phone:${normalizePhone(phone)}`,
-        `name:${normalizeName(job.customer_name)}`,
-      ].filter(Boolean) as string[];
-      const matches = groups.filter((group) =>
-        identities.some((identity) => group.identities.has(identity)),
-      );
-      if (!matches.length) {
-        groups.push({
-          key: identities[0],
-          name: job.customer_name,
-          email,
-          phone,
-          identities: new Set(identities),
-          jobs: [job],
-        });
-        continue;
-      }
-      const primary = matches[0];
-      primary.jobs.push(job);
-      identities.forEach((identity) => primary.identities.add(identity));
-      primary.email ||= email;
-      primary.phone ||= phone;
-      for (const duplicate of matches.slice(1)) {
-        duplicate.jobs.forEach((record) => primary.jobs.push(record));
-        duplicate.identities.forEach((identity) =>
-          primary.identities.add(identity),
-        );
-        primary.email ||= duplicate.email;
-        primary.phone ||= duplicate.phone;
-        groups.splice(groups.indexOf(duplicate), 1);
-      }
-    }
-
-    return groups
+    return customers
       .map((customer) => {
-        const jobIds = new Set(customer.jobs.map((job) => job.id));
-        const activeJobs = customer.jobs.filter(
-          (job) => !["delivered", "completed"].includes(job.status),
+        const customerJobs = jobs.filter(
+          (job) =>
+            job.customer_id === customer.id ||
+            (!job.customer_id &&
+              normalizeName(job.customer_name) === normalizeName(customer.name)),
+        );
+        const jobIds = new Set(customerJobs.map((job) => job.id));
+        const activeJobs = customerJobs.filter(
+          (job) =>
+            !["delivered", "completed", "cancelled"].includes(job.status),
         );
         const invoices = documents.filter(
           (document) =>
@@ -1182,6 +1221,8 @@ function Customers({
         );
         return {
           ...customer,
+          key: customer.id,
+          jobs: customerJobs,
           activeJobs,
           totalDue: invoices.reduce(
             (total, invoice) =>
@@ -1192,9 +1233,9 @@ function Customers({
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [documents, jobs]);
+  }, [customers, documents, jobs]);
   const query = search.trim().toLocaleLowerCase();
-  const visible = customers.filter((customer) =>
+  const visible = customerRows.filter((customer) =>
     !query ||
     [
       customer.name,
@@ -1659,10 +1700,12 @@ function JobDrawer({
   profiles,
   factories,
   items,
+  customers,
   canFinance,
   canDelete,
   onClose,
   onSave,
+  onCreateCustomer,
   onDelete,
 }: {
   job: Job | null;
@@ -1670,16 +1713,31 @@ function JobDrawer({
   profiles: Profile[];
   factories: FactoryRecord[];
   items: Item[];
+  customers: Customer[];
   canFinance: boolean;
   canDelete: boolean;
   onClose: () => void;
   onSave: (j: JobSaveInput) => Promise<void>;
+  onCreateCustomer: (customer: {
+    name: string;
+    phone: string;
+    email: string;
+    contact_person: string;
+  }) => Promise<Customer>;
   onDelete: (id: string) => Promise<void>;
 }) {
   const [form, setForm] = useState<Partial<Job>>(
     job
       ? {
           ...job,
+          customer_id:
+            job.customer_id ||
+            customers.find(
+              (customer) =>
+                customer.name.trim().toLocaleLowerCase() ===
+                job.customer_name.trim().toLocaleLowerCase(),
+            )?.id ||
+            null,
           status: job.status === "unpaid" ? "incomplete" : job.status,
         }
       : {
@@ -1698,12 +1756,27 @@ function JobDrawer({
     [],
   );
   const [productionError, setProductionError] = useState("");
+  const customerListId = useId();
+  const [customerOpen, setCustomerOpen] = useState(false);
+  const [customerError, setCustomerError] = useState("");
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancellationReason, setCancellationReason] = useState(
     job?.cancellation_reason || "",
   );
   const [cancellationError, setCancellationError] = useState("");
   const set = (k: keyof Job, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
+  const selectCustomer = (customer: Customer) => {
+    setForm((current) => ({
+      ...current,
+      customer_id: customer.id,
+      customer_name: customer.name,
+      customer_phone: customer.phone,
+      customer_email: customer.email,
+      contact_person: customer.contact_person,
+    }));
+    setCustomerError("");
+  };
   const available = factories.filter(
     (f) => f.active || f.id === form.factory_id,
   );
@@ -1724,6 +1797,12 @@ function JobDrawer({
         className="drawer"
         onSubmit={(e: FormEvent) => {
           e.preventDefault();
+          if (!form.customer_id) {
+            setCustomerError(
+              "Select an existing customer or create a new customer first.",
+            );
+            return;
+          }
           void onSave({ ...form, production_items: productionItems });
         }}
       >
@@ -1740,12 +1819,52 @@ function JobDrawer({
         </header>
         <FormSection title="Customer & job">
           <div className="formGrid">
-            <Field label="Customer name">
-              <input
-                required
-                value={form.customer_name || ""}
-                onChange={(e) => set("customer_name", e.target.value)}
-              />
+            <Field label="Customer name" wide>
+              <div className="customerPicker">
+                <input
+                  required
+                  list={customerListId}
+                  placeholder="Search customer name"
+                  value={form.customer_name || ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    const match = customers.find(
+                      (customer) =>
+                        customer.name.toLocaleLowerCase() ===
+                        value.trim().toLocaleLowerCase(),
+                    );
+                    if (match) selectCustomer(match);
+                    else {
+                      setForm((current) => ({
+                        ...current,
+                        customer_id: null,
+                        customer_name: value,
+                      }));
+                      setCustomerError("");
+                    }
+                  }}
+                />
+                <datalist id={customerListId}>
+                  {customers.map((customer) => (
+                    <option key={customer.id} value={customer.name}>
+                      {[customer.contact_person, customer.phone]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </option>
+                  ))}
+                </datalist>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => {
+                    setCustomerError("");
+                    setCustomerOpen(true);
+                  }}
+                >
+                  <Plus /> New customer
+                </button>
+              </div>
+              {customerError && <small className="fieldError">{customerError}</small>}
             </Field>
             <Field label="Phone">
               <input
@@ -1959,6 +2078,67 @@ function JobDrawer({
           </button>
         </footer>
       </form>
+      {customerOpen && (
+        <div className="productionOverlay">
+          <form
+            className="smallModal"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setCreatingCustomer(true);
+              setCustomerError("");
+              try {
+                const data = new FormData(event.currentTarget);
+                const customer = await onCreateCustomer({
+                  name: String(data.get("name") || ""),
+                  phone: String(data.get("phone") || ""),
+                  email: String(data.get("email") || ""),
+                  contact_person: String(data.get("contact_person") || ""),
+                });
+                selectCustomer(customer);
+                setCustomerOpen(false);
+              } catch (error) {
+                setCustomerError(
+                  error instanceof Error
+                    ? error.message
+                    : "Unable to create customer.",
+                );
+              } finally {
+                setCreatingCustomer(false);
+              }
+            }}
+          >
+            <header>
+              <div>
+                <span className="eyebrow">NEW CUSTOMER</span>
+                <h2>Add customer to the directory</h2>
+              </div>
+              <button
+                type="button"
+                className="iconBtn"
+                onClick={() => setCustomerOpen(false)}
+              >
+                <X />
+              </button>
+            </header>
+            <Field label="Customer name">
+              <input name="name" required autoFocus />
+            </Field>
+            <Field label="Contact person">
+              <input name="contact_person" />
+            </Field>
+            <Field label="Phone">
+              <input name="phone" />
+            </Field>
+            <Field label="Email address (optional)">
+              <input name="email" type="email" />
+            </Field>
+            {customerError && <div className="warning">{customerError}</div>}
+            <button className="primary customerCreate" type="submit" disabled={creatingCustomer}>
+              {creatingCustomer ? "Creating…" : "Create and select customer"}
+            </button>
+          </form>
+        </div>
+      )}
       {cancelOpen && (
         <div className="productionOverlay">
           <form
