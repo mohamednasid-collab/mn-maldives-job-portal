@@ -289,6 +289,8 @@ export default function Portal() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [editing, setEditing] = useState<Job | null | undefined>(undefined);
+  const [viewingDocument, setViewingDocument] =
+    useState<FinancialDocument | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [menu, setMenu] = useState(false);
 
@@ -519,6 +521,15 @@ export default function Portal() {
         );
         if (itemError) throw itemError;
       }
+      let automaticInvoiceNumber: string | undefined;
+      if (input.status === "production" && saved?.id) {
+        const { data: invoice, error: invoiceError } = await sb.rpc(
+          "create_production_invoice",
+          { target_job_id: saved.id },
+        );
+        if (invoiceError) throw invoiceError;
+        automaticInvoiceNumber = invoice?.[0]?.invoice_number;
+      }
       setEditing(undefined);
       await loadData();
       if (input.status === "production" && saved?.id) {
@@ -538,7 +549,12 @@ export default function Portal() {
           return;
         }
       }
-      show("success", "Job saved successfully");
+      show(
+        "success",
+        automaticInvoiceNumber
+          ? `Job saved and invoice ${automaticInvoiceNumber} is ready`
+          : "Job saved successfully",
+      );
     } catch (e) {
       show("error", e instanceof Error ? e.message : "Unable to save job");
     }
@@ -707,6 +723,7 @@ export default function Portal() {
             status={status}
             setStatus={setStatus}
             open={setEditing}
+            openInvoice={setViewingDocument}
           />
         )}
         {view === "board" && (
@@ -810,6 +827,12 @@ export default function Portal() {
           onClose={() => setEditing(undefined)}
           onSave={saveJob}
           onDelete={removeJob}
+        />
+      )}
+      {viewingDocument && (
+        <DocumentViewer
+          document={viewingDocument}
+          onClose={() => setViewingDocument(null)}
         />
       )}
       {notice && (
@@ -1007,6 +1030,7 @@ function Dashboard({
   status,
   setStatus,
   open,
+  openInvoice,
 }: {
   jobs: Job[];
   documents: FinancialDocument[];
@@ -1016,6 +1040,7 @@ function Dashboard({
   status: string;
   setStatus: (s: string) => void;
   open: (j: Job) => void;
+  openInvoice: (document: FinancialDocument) => void;
 }) {
   const invoiceMissing = jobs.filter(
     (job) =>
@@ -1072,6 +1097,7 @@ function Dashboard({
         )}
         documents={documents}
         open={open}
+        openInvoice={openInvoice}
       />
     </>
   );
@@ -1235,10 +1261,12 @@ function JobTable({
   jobs,
   documents,
   open,
+  openInvoice,
 }: {
   jobs: Job[];
   documents: FinancialDocument[];
   open: (j: Job) => void;
+  openInvoice?: (document: FinancialDocument) => void;
 }) {
   return (
     <div className="tableWrap responsiveTable">
@@ -1257,13 +1285,12 @@ function JobTable({
         </thead>
         <tbody>
           {jobs.map((j) => {
-            const invoiceNumber =
-              j.invoice_number ||
-              documents.find(
-                (document) =>
-                  document.document_type === "invoice" &&
-                  document.job_id === j.id,
-              )?.document_number;
+            const invoice = documents.find(
+              (document) =>
+                document.document_type === "invoice" &&
+                document.job_id === j.id,
+            );
+            const invoiceNumber = j.invoice_number || invoice?.document_number;
             return (
             <tr key={j.id} onClick={() => open(j)}>
               <td data-label="Job">
@@ -1293,9 +1320,24 @@ function JobTable({
               </td>
               <td data-label="Factory">{j.factory?.name || "—"}</td>
               <td data-label="Invoice number">
-                <strong style={{ color: invoiceNumber ? undefined : "#ba4035" }}>
-                  {invoiceNumber || "Invoice missing"}
-                </strong>
+                {invoice && openInvoice ? (
+                  <button
+                    type="button"
+                    className="invoiceNumberLink"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openInvoice(invoice);
+                    }}
+                  >
+                    {invoice.document_number}
+                  </button>
+                ) : (
+                  <strong
+                    style={{ color: invoiceNumber ? undefined : "#ba4035" }}
+                  >
+                    {invoiceNumber || "Invoice missing"}
+                  </strong>
+                )}
               </td>
             </tr>
             );
@@ -2173,6 +2215,7 @@ function Documents({
 }) {
   const [open, setOpen] = useState(false);
   const [editingDoc, setEditingDoc] = useState<FinancialDocument | null>(null);
+  const [viewingDoc, setViewingDoc] = useState<FinancialDocument | null>(null);
   const [payingInvoice, setPayingInvoice] =
     useState<FinancialDocument | null>(null);
   const kind = mode;
@@ -2223,7 +2266,7 @@ function Documents({
           due_date: form.due_date || null,
           terms: form.terms || "Due on Receipt",
           discount_percent: Number(form.discount_percent) || 0,
-          amount_paid: Number(form.amount_paid) || 0,
+          amount_paid: 0,
           notes: form.notes || null,
         })
         .select()
@@ -2414,11 +2457,20 @@ function Documents({
                 balance = Math.max(0, total - Number(d.amount_paid)),
                 converted = documents.some(
                   (x) => x.source_quotation_id === d.id,
-                );
+                ),
+                paymentLocked =
+                  d.document_type === "invoice" &&
+                  payments.some((payment) => payment.invoice_id === d.id);
               return (
                 <tr key={d.id}>
                   <td data-label="Number">
-                    <b className="jobNo">{d.document_number}</b>
+                    <button
+                      type="button"
+                      className="invoiceNumberLink"
+                      onClick={() => setViewingDoc(d)}
+                    >
+                      {d.document_number}
+                    </button>
                   </td>
                   <td data-label="Type">
                     <StatusPill value={d.document_type} />
@@ -2427,11 +2479,13 @@ function Documents({
                     <select
                       className={`statusSelect ${d.status}`}
                       value={d.status}
-                      disabled={converted}
+                      disabled={converted || paymentLocked}
                       title={
                         converted
                           ? "Converted quotations are locked"
-                          : undefined
+                          : paymentLocked
+                            ? "Invoices with recorded payments are locked"
+                            : undefined
                       }
                       onChange={(e) =>
                         void updateStatus(d, e.target.value as "draft" | "sent")
@@ -2457,7 +2511,7 @@ function Documents({
                       >
                         <Printer /> Print / PDF
                       </button>
-                      {!converted && (
+                      {!converted && !paymentLocked && (
                         <button
                           className="secondary compact"
                           onClick={() => setEditingDoc(d)}
@@ -2518,6 +2572,12 @@ function Documents({
             <footer><button type="button" className="secondary" onClick={() => setPayingInvoice(null)}>Cancel</button><button className="primary" type="submit">Record payment</button></footer>
           </form>
         </div>
+      )}
+      {viewingDoc && (
+        <DocumentViewer
+          document={viewingDoc}
+          onClose={() => setViewingDoc(null)}
+        />
       )}
       {open && (
         <div className="modal">
@@ -2601,15 +2661,6 @@ function Documents({
                     type="number"
                     min="0"
                     max="100"
-                    step=".01"
-                    defaultValue="0"
-                  />
-                </Field>
-                <Field label="Amount paid">
-                  <input
-                    name="amount_paid"
-                    type="number"
-                    min="0"
                     step=".01"
                     defaultValue="0"
                   />
@@ -2739,6 +2790,102 @@ function Documents({
   );
 }
 
+function DocumentViewer({
+  document,
+  onClose,
+}: {
+  document: FinancialDocument;
+  onClose: () => void;
+}) {
+  const total = documentTotal(document);
+  const balance = Math.max(0, total - Number(document.amount_paid));
+  return (
+    <div
+      className="modal"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section className="drawer documentViewer">
+        <header>
+          <div>
+            <span className="eyebrow">VIEW {document.document_type}</span>
+            <h2>{document.document_number}</h2>
+          </div>
+          <button type="button" className="iconBtn" onClick={onClose}>
+            <X />
+          </button>
+        </header>
+        <FormSection title="Customer">
+          <div className="documentViewGrid">
+            <span>Customer</span>
+            <strong>{document.customer_name}</strong>
+            <span>Subject</span>
+            <strong>{document.subject || "—"}</strong>
+            <span>Issue date</span>
+            <strong>{formatDate(document.issue_date)}</strong>
+            <span>Due date</span>
+            <strong>
+              {document.due_date ? formatDate(document.due_date) : "—"}
+            </strong>
+            <span>Status</span>
+            <strong>{labels[document.status] || document.status}</strong>
+          </div>
+        </FormSection>
+        <FormSection title="Items">
+          <div className="documentViewItems">
+            {[...document.items]
+              .sort((a, b) => a.position - b.position)
+              .map((item) => (
+                <article key={item.id || item.position}>
+                  <div>
+                    <strong>{item.description}</strong>
+                    {item.detail && <small>{item.detail}</small>}
+                  </div>
+                  <span>Qty {Number(item.quantity).toLocaleString()}</span>
+                  <span>{money(Number(item.rate))}</span>
+                  <strong>
+                    {money(Number(item.quantity) * Number(item.rate))}
+                  </strong>
+                </article>
+              ))}
+          </div>
+          <div className="documentViewTotals">
+            <span>Total</span>
+            <strong>{money(total)}</strong>
+            {document.document_type === "invoice" && (
+              <>
+                <span>Paid</span>
+                <strong>{money(Number(document.amount_paid))}</strong>
+                <span>Balance</span>
+                <strong>{money(balance)}</strong>
+              </>
+            )}
+          </div>
+        </FormSection>
+        {document.notes && (
+          <FormSection title="Notes">
+            <p className="documentViewNotes">{document.notes}</p>
+          </FormSection>
+        )}
+        <footer>
+          <span />
+          <button className="secondary" type="button" onClick={onClose}>
+            Close
+          </button>
+          <button
+            className="primary"
+            type="button"
+            onClick={() => printDocument(document)}
+          >
+            <Printer /> Print / PDF
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
 function DocumentEditor({
   document,
   jobs,
@@ -2782,7 +2929,6 @@ function DocumentEditor({
           due_date: form.due_date || null,
           terms: form.terms || "Due on Receipt",
           discount_percent: Number(form.discount_percent) || 0,
-          amount_paid: Number(form.amount_paid) || 0,
           notes: form.notes || null,
         })
         .eq("id", document.id);
@@ -2908,15 +3054,6 @@ function DocumentEditor({
                 max="100"
                 step=".01"
                 defaultValue={document.discount_percent}
-              />
-            </Field>
-            <Field label="Amount paid">
-              <input
-                name="amount_paid"
-                type="number"
-                min="0"
-                step=".01"
-                defaultValue={document.amount_paid}
               />
             </Field>
           </div>
