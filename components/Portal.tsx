@@ -1722,6 +1722,13 @@ function JobDrawer({
                 onChange={(e) => set("contact_person", e.target.value)}
               />
             </Field>
+            <Field label="Due date">
+              <input
+                type="date"
+                value={form.due_date || ""}
+                onChange={(e) => set("due_date", e.target.value)}
+              />
+            </Field>
             <Field label="Job description" wide>
               <textarea
                 required
@@ -1837,7 +1844,7 @@ function JobDrawer({
             )}
           </FormSection>
         )}
-        <FormSection title="Quotation, invoice & due date">
+        <FormSection title="Quotation & invoice">
           <div className="warning">
             Delivered jobs move to Completed only when an invoice number exists.
             Otherwise the database moves them to Incomplete.
@@ -1855,18 +1862,11 @@ function JobDrawer({
                 onChange={(e) => set("invoice_number", e.target.value)}
               />
             </Field>
-            <Field label="Due date">
-              <input
-                type="date"
-                value={form.due_date || ""}
-                onChange={(e) => set("due_date", e.target.value)}
-              />
-            </Field>
           </fieldset>
           {!canFinance && (
             <small className="helper">
-              Your account has read-only access to quotation, invoice and due
-              date fields.
+              Your account has read-only access to quotation and invoice
+              fields.
             </small>
           )}
           <Field label="Internal notes" wide>
