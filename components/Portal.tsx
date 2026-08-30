@@ -3910,6 +3910,39 @@ function Items({
   show: (kind: "success" | "error", text: string) => void;
 }) {
   const [editingItem, setEditingItem] = useState<Item | null>(null);
+  const [itemSearch, setItemSearch] = useState("");
+  const [itemSort, setItemSort] = useState("name-asc");
+  const visibleItems = useMemo(() => {
+    const query = itemSearch.trim().toLocaleLowerCase();
+    const filtered = query
+      ? items.filter((item) =>
+          [item.code, item.name, item.description || ""].some((value) =>
+            value.toLocaleLowerCase().includes(query),
+          ),
+        )
+      : [...items];
+
+    return filtered.sort((a, b) => {
+      switch (itemSort) {
+        case "name-desc":
+          return b.name.localeCompare(a.name);
+        case "code-asc":
+          return a.code.localeCompare(b.code, undefined, { numeric: true });
+        case "code-desc":
+          return b.code.localeCompare(a.code, undefined, { numeric: true });
+        case "rate-asc":
+          return a.rate - b.rate;
+        case "rate-desc":
+          return b.rate - a.rate;
+        case "newest":
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        case "oldest":
+          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        default:
+          return a.name.localeCompare(b.name);
+      }
+    });
+  }, [itemSearch, itemSort, items]);
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -4080,7 +4113,37 @@ function Items({
       )}
       <section className="sectionHead">
         <h2>Item list</h2>
-        <span className="helper">{items.length} current items</span>
+        <div className="filters itemFilters">
+          <label className="search">
+            <Search />
+            <input
+              type="search"
+              value={itemSearch}
+              onChange={(event) => setItemSearch(event.target.value)}
+              placeholder="Search code, name or description"
+              aria-label="Search items"
+            />
+          </label>
+          <select
+            value={itemSort}
+            onChange={(event) => setItemSort(event.target.value)}
+            aria-label="Sort items"
+          >
+            <option value="name-asc">Name: A–Z</option>
+            <option value="name-desc">Name: Z–A</option>
+            <option value="code-asc">Code: ascending</option>
+            <option value="code-desc">Code: descending</option>
+            <option value="rate-asc">Rate: low to high</option>
+            <option value="rate-desc">Rate: high to low</option>
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+          </select>
+          <span className="helper itemCount">
+            {itemSearch.trim()
+              ? `${visibleItems.length} of ${items.length} items`
+              : `${items.length} current items`}
+          </span>
+        </div>
       </section>
       <div className="tableWrap responsiveTable">
         <table>
@@ -4094,7 +4157,7 @@ function Items({
             </tr>
           </thead>
           <tbody>
-            {items.map((item) => (
+            {visibleItems.map((item) => (
               <tr key={item.id}>
                 <td data-label="Item code"><strong className="jobNo">{item.code}</strong></td>
                 <td data-label="Item name"><strong>{item.name}</strong></td>
@@ -4116,6 +4179,9 @@ function Items({
           </tbody>
         </table>
         {!items.length && <div className="empty">No items created yet.</div>}
+        {!!items.length && !visibleItems.length && (
+          <div className="empty">No items match your search.</div>
+        )}
       </div>
       {editingItem && (
         <div className="modal">
