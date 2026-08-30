@@ -3911,6 +3911,7 @@ function Items({
   show: (kind: "success" | "error", text: string) => void;
 }) {
   const [editingItem, setEditingItem] = useState<Item | null>(null);
+  const [creatingItem, setCreatingItem] = useState(false);
   const [itemSearch, setItemSearch] = useState("");
   const [itemSort, setItemSort] = useState("name-asc");
   const visibleItems = useMemo(() => {
@@ -3966,33 +3967,39 @@ function Items({
       show("error", "This item name already exists");
       return;
     }
+    setCreatingItem(true);
     try {
+      let createdItem: Item;
       if (demo) {
         const nextCode = String(
           Math.max(6, ...items.map((item) => Number(item.code) || 0)) + 1,
         ).padStart(3, "0");
-        setItems([
-          ...items,
-          {
-            id: crypto.randomUUID(),
-            code: nextCode,
-            name,
-            rate,
-            description: description || null,
-            created_at: new Date().toISOString(),
-          },
-        ].sort((a, b) => a.name.localeCompare(b.name)));
-      } else {
-        const { error } = await createClient().from("items").insert({
+        createdItem = {
+          id: crypto.randomUUID(),
+          code: nextCode,
           name,
           rate,
           description: description || null,
-        });
+          created_at: new Date().toISOString(),
+        };
+      } else {
+        const { data: created, error } = await createClient()
+          .from("items")
+          .insert({
+            name,
+            rate,
+            description: description || null,
+          })
+          .select("id,code,name,rate,description,created_at")
+          .single();
         if (error) throw error;
-        await reload();
+        createdItem = created as Item;
       }
+      setItems(
+        [...items, createdItem].sort((a, b) => a.name.localeCompare(b.name)),
+      );
       form.reset();
-      show("success", "Item created");
+      show("success", `Item ${createdItem.code} created`);
     } catch (error) {
       const duplicateError =
         typeof error === "object" &&
@@ -4007,6 +4014,8 @@ function Items({
             ? error.message
             : "Unable to create item",
       );
+    } finally {
+      setCreatingItem(false);
     }
   };
   const updateItem = async (event: FormEvent<HTMLFormElement>) => {
@@ -4080,8 +4089,8 @@ function Items({
           <Field label="Item description (optional)" wide>
             <textarea name="description" rows={3} maxLength={2000} />
           </Field>
-          <button className="primary" type="submit">
-            <Plus /> Create item
+          <button className="primary" type="submit" disabled={creatingItem}>
+            <Plus /> {creatingItem ? "Creating…" : "Create item"}
           </button>
           <small className="helper">Item codes are generated automatically in sequence, starting from 007.</small>
         </form>
