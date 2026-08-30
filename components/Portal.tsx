@@ -1133,7 +1133,6 @@ function Dashboard({
 }) {
   const invoiceMissing = jobs.filter(
     (job) =>
-      job.status !== "cancelled" &&
       !job.invoice_number?.trim() &&
       !documents.some(
         (document) =>
@@ -3911,64 +3910,19 @@ function Items({
   show: (kind: "success" | "error", text: string) => void;
 }) {
   const [editingItem, setEditingItem] = useState<Item | null>(null);
-  const [itemSearch, setItemSearch] = useState("");
-  const [itemSort, setItemSort] = useState("name-asc");
-  const visibleItems = useMemo(() => {
-    const query = itemSearch.trim().toLocaleLowerCase();
-    const filtered = query
-      ? items.filter((item) =>
-          [item.code, item.name, item.description || ""].some((value) =>
-            value.toLocaleLowerCase().includes(query),
-          ),
-        )
-      : [...items];
-
-    return filtered.sort((a, b) => {
-      switch (itemSort) {
-        case "name-desc":
-          return b.name.localeCompare(a.name);
-        case "code-asc":
-          return a.code.localeCompare(b.code, undefined, { numeric: true });
-        case "code-desc":
-          return b.code.localeCompare(a.code, undefined, { numeric: true });
-        case "rate-asc":
-          return a.rate - b.rate;
-        case "rate-desc":
-          return b.rate - a.rate;
-        case "newest":
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-        case "oldest":
-          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-        default:
-          return a.name.localeCompare(b.name);
-      }
-    });
-  }, [itemSearch, itemSort, items]);
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
-    const code = String(data.get("code") || "").trim();
     const name = String(data.get("name") || "").trim();
     const rate = Number(data.get("rate"));
     const description = String(data.get("description") || "").trim();
-    if (!code) {
-      show("error", "Enter an item code");
-      return;
-    }
     if (!name) {
       show("error", "Enter an item name");
       return;
     }
     if (!Number.isFinite(rate) || rate < 0) {
       show("error", "Enter a valid item rate");
-      return;
-    }
-    const duplicateCode = items.some(
-      (item) => item.code.trim().toLocaleLowerCase() === code.toLocaleLowerCase(),
-    );
-    if (duplicateCode) {
-      show("error", "This item code already exists");
       return;
     }
     const duplicateName = items.some(
@@ -3980,11 +3934,14 @@ function Items({
     }
     try {
       if (demo) {
+        const nextCode = String(
+          Math.max(6, ...items.map((item) => Number(item.code) || 0)) + 1,
+        ).padStart(3, "0");
         setItems([
           ...items,
           {
             id: crypto.randomUUID(),
-            code,
+            code: nextCode,
             name,
             rate,
             description: description || null,
@@ -3993,7 +3950,6 @@ function Items({
         ].sort((a, b) => a.name.localeCompare(b.name)));
       } else {
         const { error } = await createClient().from("items").insert({
-          code,
           name,
           rate,
           description: description || null,
@@ -4023,22 +3979,11 @@ function Items({
     event.preventDefault();
     if (!editingItem) return;
     const data = new FormData(event.currentTarget);
-    const code = String(data.get("code") || "").trim();
     const name = String(data.get("name") || "").trim();
     const rate = Number(data.get("rate"));
     const description = String(data.get("description") || "").trim();
-    if (!code || !name || !Number.isFinite(rate) || rate < 0) {
-      show("error", "Enter a valid item code, name and rate");
-      return;
-    }
-    if (
-      items.some(
-        (item) =>
-          item.id !== editingItem.id &&
-          item.code.trim().toLocaleLowerCase() === code.toLocaleLowerCase(),
-      )
-    ) {
-      show("error", "This item code already exists");
+    if (!name || !Number.isFinite(rate) || rate < 0) {
+      show("error", "Enter a valid item name and rate");
       return;
     }
     if (
@@ -4057,7 +4002,7 @@ function Items({
           items
             .map((item) =>
               item.id === editingItem.id
-                ? { ...item, code, name, rate, description: description || null }
+                ? { ...item, name, rate, description: description || null }
                 : item,
             )
             .sort((a, b) => a.name.localeCompare(b.name)),
@@ -4065,7 +4010,7 @@ function Items({
       } else {
         const { error } = await createClient()
           .from("items")
-          .update({ code, name, rate, description: description || null })
+          .update({ name, rate, description: description || null })
           .eq("id", editingItem.id);
         if (error) throw error;
         await reload();
@@ -4081,7 +4026,7 @@ function Items({
       show(
         "error",
         duplicateError
-          ? "This item code or name already exists"
+          ? "This item name already exists"
           : error instanceof Error
             ? error.message
             : "Unable to update item",
@@ -4092,9 +4037,6 @@ function Items({
     <>
       {canCreate && (
         <form className="itemAdd formGrid" onSubmit={save}>
-          <Field label="Item code">
-            <input name="code" required maxLength={50} />
-          </Field>
           <Field label="Item name">
             <input name="name" required maxLength={160} />
           </Field>
@@ -4107,6 +4049,7 @@ function Items({
           <button className="primary" type="submit">
             <Plus /> Create item
           </button>
+          <small className="helper">Item codes are generated automatically in sequence, starting from 007.</small>
         </form>
       )}
       {!canCreate && (
@@ -4114,37 +4057,7 @@ function Items({
       )}
       <section className="sectionHead">
         <h2>Item list</h2>
-        <div className="filters itemFilters">
-          <label className="search">
-            <Search />
-            <input
-              type="search"
-              value={itemSearch}
-              onChange={(event) => setItemSearch(event.target.value)}
-              placeholder="Search code, name or description"
-              aria-label="Search items"
-            />
-          </label>
-          <select
-            value={itemSort}
-            onChange={(event) => setItemSort(event.target.value)}
-            aria-label="Sort items"
-          >
-            <option value="name-asc">Name: A–Z</option>
-            <option value="name-desc">Name: Z–A</option>
-            <option value="code-asc">Code: ascending</option>
-            <option value="code-desc">Code: descending</option>
-            <option value="rate-asc">Rate: low to high</option>
-            <option value="rate-desc">Rate: high to low</option>
-            <option value="newest">Newest first</option>
-            <option value="oldest">Oldest first</option>
-          </select>
-          <span className="helper itemCount">
-            {itemSearch.trim()
-              ? `${visibleItems.length} of ${items.length} items`
-              : `${items.length} current items`}
-          </span>
-        </div>
+        <span className="helper">{items.length} current items</span>
       </section>
       <div className="tableWrap responsiveTable">
         <table>
@@ -4158,7 +4071,7 @@ function Items({
             </tr>
           </thead>
           <tbody>
-            {visibleItems.map((item) => (
+            {items.map((item) => (
               <tr key={item.id}>
                 <td data-label="Item code"><strong className="jobNo">{item.code}</strong></td>
                 <td data-label="Item name"><strong>{item.name}</strong></td>
@@ -4180,9 +4093,6 @@ function Items({
           </tbody>
         </table>
         {!items.length && <div className="empty">No items created yet.</div>}
-        {!!items.length && !visibleItems.length && (
-          <div className="empty">No items match your search.</div>
-        )}
       </div>
       {editingItem && (
         <div className="modal">
@@ -4201,7 +4111,7 @@ function Items({
               </button>
             </header>
             <Field label="Item code">
-              <input name="code" required maxLength={50} defaultValue={editingItem.code} />
+              <input value={editingItem.code} readOnly className="catalogItemLocked" />
             </Field>
             <Field label="Item name">
               <input name="name" required maxLength={160} defaultValue={editingItem.name} />
