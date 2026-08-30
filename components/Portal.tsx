@@ -1133,6 +1133,7 @@ function Dashboard({
 }) {
   const invoiceMissing = jobs.filter(
     (job) =>
+      job.status !== "cancelled" &&
       !job.invoice_number?.trim() &&
       !documents.some(
         (document) =>
