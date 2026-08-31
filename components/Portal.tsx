@@ -2471,10 +2471,26 @@ function Documents({
   const [viewingDoc, setViewingDoc] = useState<FinancialDocument | null>(null);
   const [payingInvoice, setPayingInvoice] =
     useState<FinancialDocument | null>(null);
+  const [invoiceStatus, setInvoiceStatus] = useState<
+    "outstanding" | "all" | "unpaid" | "part_paid" | "paid"
+  >("outstanding");
   const kind = mode;
-  const visibleDocuments = documents.filter(
-    (document) => document.document_type === mode,
-  );
+  const visibleDocuments = documents.filter((document) => {
+    if (document.document_type !== mode || mode !== "invoice") {
+      return document.document_type === mode;
+    }
+    const total = documentTotal(document);
+    const amountPaid = Number(document.amount_paid);
+    const paymentStatus =
+      amountPaid >= total
+        ? "paid"
+        : amountPaid > 0
+          ? "part_paid"
+          : "unpaid";
+    if (invoiceStatus === "all") return true;
+    if (invoiceStatus === "outstanding") return paymentStatus !== "paid";
+    return paymentStatus === invoiceStatus;
+  });
   const [items, setItems] = useState<DocumentItem[]>([
     { item_id: null, description: "", detail: null, quantity: 1, rate: 0, position: 1 },
   ]);
@@ -2698,7 +2714,29 @@ function Documents({
       )}
       <section className="sectionHead">
         <h2>{mode === "quotation" ? "Customer quotations" : "Customer invoices"}</h2>
-        <div className="docActions">
+        <div className={mode === "invoice" ? "filters" : "docActions"}>
+          {mode === "invoice" && (
+            <select
+              aria-label="Filter invoices by payment status"
+              value={invoiceStatus}
+              onChange={(event) =>
+                setInvoiceStatus(
+                  event.target.value as
+                    | "outstanding"
+                    | "all"
+                    | "unpaid"
+                    | "part_paid"
+                    | "paid",
+                )
+              }
+            >
+              <option value="outstanding">Outstanding</option>
+              <option value="all">All statuses</option>
+              <option value="unpaid">Unpaid</option>
+              <option value="part_paid">Part-paid</option>
+              <option value="paid">Paid</option>
+            </select>
+          )}
           <button
             className="primary"
             onClick={() => setOpen(true)}
@@ -2820,7 +2858,11 @@ function Documents({
         </table>
         {!visibleDocuments.length && (
           <div className="empty">
-            No {mode === "quotation" ? "quotations" : "invoices"} yet.
+            {mode === "quotation"
+              ? "No quotations yet."
+              : invoiceStatus === "outstanding"
+                ? "No outstanding invoices."
+                : `No ${invoiceStatus === "all" ? "invoices" : labels[invoiceStatus].toLowerCase() + " invoices"} found.`}
           </div>
         )}
       </div>
@@ -3911,7 +3953,6 @@ function Items({
   show: (kind: "success" | "error", text: string) => void;
 }) {
   const [editingItem, setEditingItem] = useState<Item | null>(null);
-  const [creatingItem, setCreatingItem] = useState(false);
   const [itemSearch, setItemSearch] = useState("");
   const [itemSort, setItemSort] = useState("name-asc");
   const visibleItems = useMemo(() => {
@@ -3949,15 +3990,27 @@ function Items({
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
+    const code = String(data.get("code") || "").trim();
     const name = String(data.get("name") || "").trim();
     const rate = Number(data.get("rate"));
     const description = String(data.get("description") || "").trim();
+    if (!code) {
+      show("error", "Enter an item code");
+      return;
+    }
     if (!name) {
       show("error", "Enter an item name");
       return;
     }
     if (!Number.isFinite(rate) || rate < 0) {
       show("error", "Enter a valid item rate");
+      return;
+    }
+    const duplicateCode = items.some(
+      (item) => item.code.trim().toLocaleLowerCase() === code.toLocaleLowerCase(),
+    );
+    if (duplicateCode) {
+      show("error", "This item code already exists");
       return;
     }
     const duplicateName = items.some(
@@ -3967,39 +4020,31 @@ function Items({
       show("error", "This item name already exists");
       return;
     }
-    setCreatingItem(true);
     try {
-      let createdItem: Item;
       if (demo) {
-        const nextCode = String(
-          Math.max(6, ...items.map((item) => Number(item.code) || 0)) + 1,
-        ).padStart(3, "0");
-        createdItem = {
-          id: crypto.randomUUID(),
-          code: nextCode,
-          name,
-          rate,
-          description: description || null,
-          created_at: new Date().toISOString(),
-        };
-      } else {
-        const { data: created, error } = await createClient()
-          .from("items")
-          .insert({
+        setItems([
+          ...items,
+          {
+            id: crypto.randomUUID(),
+            code,
             name,
             rate,
             description: description || null,
-          })
-          .select("id,code,name,rate,description,created_at")
-          .single();
+            created_at: new Date().toISOString(),
+          },
+        ].sort((a, b) => a.name.localeCompare(b.name)));
+      } else {
+        const { error } = await createClient().from("items").insert({
+          code,
+          name,
+          rate,
+          description: description || null,
+        });
         if (error) throw error;
-        createdItem = created as Item;
+        await reload();
       }
-      setItems(
-        [...items, createdItem].sort((a, b) => a.name.localeCompare(b.name)),
-      );
       form.reset();
-      show("success", `Item ${createdItem.code} created`);
+      show("success", "Item created");
     } catch (error) {
       const duplicateError =
         typeof error === "object" &&
@@ -4014,19 +4059,28 @@ function Items({
             ? error.message
             : "Unable to create item",
       );
-    } finally {
-      setCreatingItem(false);
     }
   };
   const updateItem = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!editingItem) return;
     const data = new FormData(event.currentTarget);
+    const code = String(data.get("code") || "").trim();
     const name = String(data.get("name") || "").trim();
     const rate = Number(data.get("rate"));
     const description = String(data.get("description") || "").trim();
-    if (!name || !Number.isFinite(rate) || rate < 0) {
-      show("error", "Enter a valid item name and rate");
+    if (!code || !name || !Number.isFinite(rate) || rate < 0) {
+      show("error", "Enter a valid item code, name and rate");
+      return;
+    }
+    if (
+      items.some(
+        (item) =>
+          item.id !== editingItem.id &&
+          item.code.trim().toLocaleLowerCase() === code.toLocaleLowerCase(),
+      )
+    ) {
+      show("error", "This item code already exists");
       return;
     }
     if (
@@ -4045,7 +4099,7 @@ function Items({
           items
             .map((item) =>
               item.id === editingItem.id
-                ? { ...item, name, rate, description: description || null }
+                ? { ...item, code, name, rate, description: description || null }
                 : item,
             )
             .sort((a, b) => a.name.localeCompare(b.name)),
@@ -4053,7 +4107,7 @@ function Items({
       } else {
         const { error } = await createClient()
           .from("items")
-          .update({ name, rate, description: description || null })
+          .update({ code, name, rate, description: description || null })
           .eq("id", editingItem.id);
         if (error) throw error;
         await reload();
@@ -4069,7 +4123,7 @@ function Items({
       show(
         "error",
         duplicateError
-          ? "This item name already exists"
+          ? "This item code or name already exists"
           : error instanceof Error
             ? error.message
             : "Unable to update item",
@@ -4080,6 +4134,9 @@ function Items({
     <>
       {canCreate && (
         <form className="itemAdd formGrid" onSubmit={save}>
+          <Field label="Item code">
+            <input name="code" required maxLength={50} />
+          </Field>
           <Field label="Item name">
             <input name="name" required maxLength={160} />
           </Field>
@@ -4089,10 +4146,9 @@ function Items({
           <Field label="Item description (optional)" wide>
             <textarea name="description" rows={3} maxLength={2000} />
           </Field>
-          <button className="primary" type="submit" disabled={creatingItem}>
-            <Plus /> {creatingItem ? "Creating…" : "Create item"}
+          <button className="primary" type="submit">
+            <Plus /> Create item
           </button>
-          <small className="helper">Item codes are generated automatically in sequence, starting from 007.</small>
         </form>
       )}
       {!canCreate && (
@@ -4187,7 +4243,7 @@ function Items({
               </button>
             </header>
             <Field label="Item code">
-              <input value={editingItem.code} readOnly className="catalogItemLocked" />
+              <input name="code" required maxLength={50} defaultValue={editingItem.code} />
             </Field>
             <Field label="Item name">
               <input name="name" required maxLength={160} defaultValue={editingItem.name} />
