@@ -2474,10 +2474,19 @@ function Documents({
   const [invoiceStatus, setInvoiceStatus] = useState<
     "outstanding" | "all" | "unpaid" | "part_paid" | "paid"
   >("outstanding");
+  const [quotationStatus, setQuotationStatus] = useState<
+    "all" | "draft" | "sent" | "invoiced"
+  >("all");
   const kind = mode;
   const visibleDocuments = documents.filter((document) => {
-    if (document.document_type !== mode || mode !== "invoice") {
-      return document.document_type === mode;
+    if (document.document_type !== mode) return false;
+    if (mode === "quotation") {
+      const invoiced = documents.some(
+        (candidate) => candidate.source_quotation_id === document.id,
+      );
+      if (quotationStatus === "all") return true;
+      if (quotationStatus === "invoiced") return invoiced;
+      return !invoiced && document.status === quotationStatus;
     }
     const total = documentTotal(document);
     const amountPaid = Number(document.amount_paid);
@@ -2714,7 +2723,23 @@ function Documents({
       )}
       <section className="sectionHead">
         <h2>{mode === "quotation" ? "Customer quotations" : "Customer invoices"}</h2>
-        <div className={mode === "invoice" ? "filters" : "docActions"}>
+        <div className="filters">
+          {mode === "quotation" && (
+            <select
+              aria-label="Filter quotations by status"
+              value={quotationStatus}
+              onChange={(event) =>
+                setQuotationStatus(
+                  event.target.value as "all" | "draft" | "sent" | "invoiced",
+                )
+              }
+            >
+              <option value="all">All</option>
+              <option value="draft">Draft</option>
+              <option value="sent">Sent</option>
+              <option value="invoiced">Invoiced</option>
+            </select>
+          )}
           {mode === "invoice" && (
             <select
               aria-label="Filter invoices by payment status"
@@ -2859,7 +2884,9 @@ function Documents({
         {!visibleDocuments.length && (
           <div className="empty">
             {mode === "quotation"
-              ? "No quotations yet."
+              ? quotationStatus === "all"
+                ? "No quotations yet."
+                : `No ${quotationStatus} quotations found.`
               : invoiceStatus === "outstanding"
                 ? "No outstanding invoices."
                 : `No ${invoiceStatus === "all" ? "invoices" : labels[invoiceStatus].toLowerCase() + " invoices"} found.`}
