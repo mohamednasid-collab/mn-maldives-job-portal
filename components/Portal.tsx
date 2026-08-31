@@ -813,7 +813,13 @@ export default function Portal() {
           />
         )}
         {view === "tasks" && (
-          <Tasks tasks={tasks} jobs={filtered} profiles={profiles} open={setEditing} />
+          <Tasks
+            tasks={tasks}
+            jobs={filtered}
+            documents={documents}
+            profiles={profiles}
+            open={setEditing}
+          />
         )}
         {view === "items" && (
           <Items
@@ -1457,14 +1463,22 @@ function Board({
 function Tasks({
   tasks,
   jobs,
+  documents,
   profiles,
   open,
 }: {
   tasks: Task[];
   jobs: Job[];
+  documents: FinancialDocument[];
   profiles: Profile[];
   open: (j: Job) => void;
 }) {
+  const hiddenJobStatuses: JobStatus[] = ["completed", "cancelled"];
+  const invoicedJobIds = new Set(
+    documents
+      .filter((document) => document.document_type === "invoice" && document.job_id)
+      .map((document) => document.job_id),
+  );
   return (
     <>
       <section className="sectionHead">
@@ -1475,10 +1489,21 @@ function Tasks({
           .filter((p) => ["super_admin", "admin", "finance"].includes(p.role))
           .map((p) => {
             const assignedJobs = jobs.filter(
-              (j) => j.assigned_admin_id === p.id && j.status !== "completed",
+              (j) =>
+                j.assigned_admin_id === p.id &&
+                !hiddenJobStatuses.includes(j.status),
             );
             const assignedTasks = tasks.filter(
-              (task) => task.assigned_to === p.id && task.status !== "done",
+              (task) => {
+                if (task.assigned_to !== p.id || task.status === "done") return false;
+                const job = jobs.find((item) => item.id === task.job_id);
+                if (job && hiddenJobStatuses.includes(job.status)) return false;
+                return !(
+                  task.title === "Create invoice and email customer" &&
+                  task.job_id &&
+                  invoicedJobIds.has(task.job_id)
+                );
+              },
             );
             return (
               <section className="taskLane" key={p.id}>
@@ -2471,35 +2496,10 @@ function Documents({
   const [viewingDoc, setViewingDoc] = useState<FinancialDocument | null>(null);
   const [payingInvoice, setPayingInvoice] =
     useState<FinancialDocument | null>(null);
-  const [invoiceStatus, setInvoiceStatus] = useState<
-    "outstanding" | "all" | "unpaid" | "part_paid" | "paid"
-  >("outstanding");
-  const [quotationStatus, setQuotationStatus] = useState<
-    "all" | "draft" | "sent" | "invoiced"
-  >("all");
   const kind = mode;
-  const visibleDocuments = documents.filter((document) => {
-    if (document.document_type !== mode) return false;
-    if (mode === "quotation") {
-      const invoiced = documents.some(
-        (candidate) => candidate.source_quotation_id === document.id,
-      );
-      if (quotationStatus === "all") return true;
-      if (quotationStatus === "invoiced") return invoiced;
-      return !invoiced && document.status === quotationStatus;
-    }
-    const total = documentTotal(document);
-    const amountPaid = Number(document.amount_paid);
-    const paymentStatus =
-      amountPaid >= total
-        ? "paid"
-        : amountPaid > 0
-          ? "part_paid"
-          : "unpaid";
-    if (invoiceStatus === "all") return true;
-    if (invoiceStatus === "outstanding") return paymentStatus !== "paid";
-    return paymentStatus === invoiceStatus;
-  });
+  const visibleDocuments = documents.filter(
+    (document) => document.document_type === mode,
+  );
   const [items, setItems] = useState<DocumentItem[]>([
     { item_id: null, description: "", detail: null, quantity: 1, rate: 0, position: 1 },
   ]);
@@ -2723,45 +2723,7 @@ function Documents({
       )}
       <section className="sectionHead">
         <h2>{mode === "quotation" ? "Customer quotations" : "Customer invoices"}</h2>
-        <div className="filters">
-          {mode === "quotation" && (
-            <select
-              aria-label="Filter quotations by status"
-              value={quotationStatus}
-              onChange={(event) =>
-                setQuotationStatus(
-                  event.target.value as "all" | "draft" | "sent" | "invoiced",
-                )
-              }
-            >
-              <option value="all">All</option>
-              <option value="draft">Draft</option>
-              <option value="sent">Sent</option>
-              <option value="invoiced">Invoiced</option>
-            </select>
-          )}
-          {mode === "invoice" && (
-            <select
-              aria-label="Filter invoices by payment status"
-              value={invoiceStatus}
-              onChange={(event) =>
-                setInvoiceStatus(
-                  event.target.value as
-                    | "outstanding"
-                    | "all"
-                    | "unpaid"
-                    | "part_paid"
-                    | "paid",
-                )
-              }
-            >
-              <option value="outstanding">Outstanding</option>
-              <option value="all">All statuses</option>
-              <option value="unpaid">Unpaid</option>
-              <option value="part_paid">Part-paid</option>
-              <option value="paid">Paid</option>
-            </select>
-          )}
+        <div className="docActions">
           <button
             className="primary"
             onClick={() => setOpen(true)}
@@ -2883,13 +2845,7 @@ function Documents({
         </table>
         {!visibleDocuments.length && (
           <div className="empty">
-            {mode === "quotation"
-              ? quotationStatus === "all"
-                ? "No quotations yet."
-                : `No ${quotationStatus} quotations found.`
-              : invoiceStatus === "outstanding"
-                ? "No outstanding invoices."
-                : `No ${invoiceStatus === "all" ? "invoices" : labels[invoiceStatus].toLowerCase() + " invoices"} found.`}
+            No {mode === "quotation" ? "quotations" : "invoices"} yet.
           </div>
         )}
       </div>
@@ -3980,6 +3936,7 @@ function Items({
   show: (kind: "success" | "error", text: string) => void;
 }) {
   const [editingItem, setEditingItem] = useState<Item | null>(null);
+  const [creatingItem, setCreatingItem] = useState(false);
   const [itemSearch, setItemSearch] = useState("");
   const [itemSort, setItemSort] = useState("name-asc");
   const visibleItems = useMemo(() => {
@@ -4017,27 +3974,15 @@ function Items({
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
-    const code = String(data.get("code") || "").trim();
     const name = String(data.get("name") || "").trim();
     const rate = Number(data.get("rate"));
     const description = String(data.get("description") || "").trim();
-    if (!code) {
-      show("error", "Enter an item code");
-      return;
-    }
     if (!name) {
       show("error", "Enter an item name");
       return;
     }
     if (!Number.isFinite(rate) || rate < 0) {
       show("error", "Enter a valid item rate");
-      return;
-    }
-    const duplicateCode = items.some(
-      (item) => item.code.trim().toLocaleLowerCase() === code.toLocaleLowerCase(),
-    );
-    if (duplicateCode) {
-      show("error", "This item code already exists");
       return;
     }
     const duplicateName = items.some(
@@ -4047,31 +3992,39 @@ function Items({
       show("error", "This item name already exists");
       return;
     }
+    setCreatingItem(true);
     try {
+      let createdItem: Item;
       if (demo) {
-        setItems([
-          ...items,
-          {
-            id: crypto.randomUUID(),
-            code,
-            name,
-            rate,
-            description: description || null,
-            created_at: new Date().toISOString(),
-          },
-        ].sort((a, b) => a.name.localeCompare(b.name)));
-      } else {
-        const { error } = await createClient().from("items").insert({
-          code,
+        const nextCode = String(
+          Math.max(6, ...items.map((item) => Number(item.code) || 0)) + 1,
+        ).padStart(3, "0");
+        createdItem = {
+          id: crypto.randomUUID(),
+          code: nextCode,
           name,
           rate,
           description: description || null,
-        });
+          created_at: new Date().toISOString(),
+        };
+      } else {
+        const { data: created, error } = await createClient()
+          .from("items")
+          .insert({
+            name,
+            rate,
+            description: description || null,
+          })
+          .select("id,code,name,rate,description,created_at")
+          .single();
         if (error) throw error;
-        await reload();
+        createdItem = created as Item;
       }
+      setItems(
+        [...items, createdItem].sort((a, b) => a.name.localeCompare(b.name)),
+      );
       form.reset();
-      show("success", "Item created");
+      show("success", `Item ${createdItem.code} created`);
     } catch (error) {
       const duplicateError =
         typeof error === "object" &&
@@ -4086,28 +4039,19 @@ function Items({
             ? error.message
             : "Unable to create item",
       );
+    } finally {
+      setCreatingItem(false);
     }
   };
   const updateItem = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!editingItem) return;
     const data = new FormData(event.currentTarget);
-    const code = String(data.get("code") || "").trim();
     const name = String(data.get("name") || "").trim();
     const rate = Number(data.get("rate"));
     const description = String(data.get("description") || "").trim();
-    if (!code || !name || !Number.isFinite(rate) || rate < 0) {
-      show("error", "Enter a valid item code, name and rate");
-      return;
-    }
-    if (
-      items.some(
-        (item) =>
-          item.id !== editingItem.id &&
-          item.code.trim().toLocaleLowerCase() === code.toLocaleLowerCase(),
-      )
-    ) {
-      show("error", "This item code already exists");
+    if (!name || !Number.isFinite(rate) || rate < 0) {
+      show("error", "Enter a valid item name and rate");
       return;
     }
     if (
@@ -4126,7 +4070,7 @@ function Items({
           items
             .map((item) =>
               item.id === editingItem.id
-                ? { ...item, code, name, rate, description: description || null }
+                ? { ...item, name, rate, description: description || null }
                 : item,
             )
             .sort((a, b) => a.name.localeCompare(b.name)),
@@ -4134,7 +4078,7 @@ function Items({
       } else {
         const { error } = await createClient()
           .from("items")
-          .update({ code, name, rate, description: description || null })
+          .update({ name, rate, description: description || null })
           .eq("id", editingItem.id);
         if (error) throw error;
         await reload();
@@ -4150,7 +4094,7 @@ function Items({
       show(
         "error",
         duplicateError
-          ? "This item code or name already exists"
+          ? "This item name already exists"
           : error instanceof Error
             ? error.message
             : "Unable to update item",
@@ -4161,9 +4105,6 @@ function Items({
     <>
       {canCreate && (
         <form className="itemAdd formGrid" onSubmit={save}>
-          <Field label="Item code">
-            <input name="code" required maxLength={50} />
-          </Field>
           <Field label="Item name">
             <input name="name" required maxLength={160} />
           </Field>
@@ -4173,9 +4114,10 @@ function Items({
           <Field label="Item description (optional)" wide>
             <textarea name="description" rows={3} maxLength={2000} />
           </Field>
-          <button className="primary" type="submit">
-            <Plus /> Create item
+          <button className="primary" type="submit" disabled={creatingItem}>
+            <Plus /> {creatingItem ? "Creating…" : "Create item"}
           </button>
+          <small className="helper">Item codes are generated automatically in sequence, starting from 007.</small>
         </form>
       )}
       {!canCreate && (
@@ -4270,7 +4212,7 @@ function Items({
               </button>
             </header>
             <Field label="Item code">
-              <input name="code" required maxLength={50} defaultValue={editingItem.code} />
+              <input value={editingItem.code} readOnly className="catalogItemLocked" />
             </Field>
             <Field label="Item name">
               <input name="name" required maxLength={160} defaultValue={editingItem.name} />
