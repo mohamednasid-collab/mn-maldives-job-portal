@@ -2496,10 +2496,35 @@ function Documents({
   const [viewingDoc, setViewingDoc] = useState<FinancialDocument | null>(null);
   const [payingInvoice, setPayingInvoice] =
     useState<FinancialDocument | null>(null);
+  const [invoiceStatus, setInvoiceStatus] = useState<
+    "outstanding" | "all" | "unpaid" | "part_paid" | "paid"
+  >("outstanding");
+  const [quotationStatus, setQuotationStatus] = useState<
+    "all" | "draft" | "sent" | "invoiced"
+  >("all");
   const kind = mode;
-  const visibleDocuments = documents.filter(
-    (document) => document.document_type === mode,
-  );
+  const visibleDocuments = documents.filter((document) => {
+    if (document.document_type !== mode) return false;
+    if (mode === "quotation") {
+      const invoiced = documents.some(
+        (candidate) => candidate.source_quotation_id === document.id,
+      );
+      if (quotationStatus === "all") return true;
+      if (quotationStatus === "invoiced") return invoiced;
+      return !invoiced && document.status === quotationStatus;
+    }
+    const total = documentTotal(document);
+    const amountPaid = Number(document.amount_paid);
+    const paymentStatus =
+      amountPaid >= total
+        ? "paid"
+        : amountPaid > 0
+          ? "part_paid"
+          : "unpaid";
+    if (invoiceStatus === "all") return true;
+    if (invoiceStatus === "outstanding") return paymentStatus !== "paid";
+    return paymentStatus === invoiceStatus;
+  });
   const [items, setItems] = useState<DocumentItem[]>([
     { item_id: null, description: "", detail: null, quantity: 1, rate: 0, position: 1 },
   ]);
@@ -2723,7 +2748,45 @@ function Documents({
       )}
       <section className="sectionHead">
         <h2>{mode === "quotation" ? "Customer quotations" : "Customer invoices"}</h2>
-        <div className="docActions">
+        <div className="filters">
+          {mode === "quotation" && (
+            <select
+              aria-label="Filter quotations by status"
+              value={quotationStatus}
+              onChange={(event) =>
+                setQuotationStatus(
+                  event.target.value as "all" | "draft" | "sent" | "invoiced",
+                )
+              }
+            >
+              <option value="all">All</option>
+              <option value="draft">Draft</option>
+              <option value="sent">Sent</option>
+              <option value="invoiced">Invoiced</option>
+            </select>
+          )}
+          {mode === "invoice" && (
+            <select
+              aria-label="Filter invoices by payment status"
+              value={invoiceStatus}
+              onChange={(event) =>
+                setInvoiceStatus(
+                  event.target.value as
+                    | "outstanding"
+                    | "all"
+                    | "unpaid"
+                    | "part_paid"
+                    | "paid",
+                )
+              }
+            >
+              <option value="outstanding">Outstanding</option>
+              <option value="all">All statuses</option>
+              <option value="unpaid">Unpaid</option>
+              <option value="part_paid">Part-paid</option>
+              <option value="paid">Paid</option>
+            </select>
+          )}
           <button
             className="primary"
             onClick={() => setOpen(true)}
@@ -2845,7 +2908,13 @@ function Documents({
         </table>
         {!visibleDocuments.length && (
           <div className="empty">
-            No {mode === "quotation" ? "quotations" : "invoices"} yet.
+            {mode === "quotation"
+              ? quotationStatus === "all"
+                ? "No quotations yet."
+                : `No ${quotationStatus} quotations found.`
+              : invoiceStatus === "outstanding"
+                ? "No outstanding invoices."
+                : `No ${invoiceStatus === "all" ? "invoices" : labels[invoiceStatus].toLowerCase() + " invoices"} found.`}
           </div>
         )}
       </div>
