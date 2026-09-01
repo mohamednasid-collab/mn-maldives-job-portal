@@ -666,8 +666,6 @@ export default function Portal() {
   if (!profile) return <Login onLogin={login} />;
   const operationsNav = [
     { id: "dashboard", label: "Dashboard", Icon: LayoutDashboard },
-    { id: "board", label: "Status board", Icon: BarChart3 },
-    { id: "tasks", label: "Tasks", Icon: ClipboardCheck },
     { id: "items", label: "Items", Icon: Package },
     { id: "customers", label: "Customers", Icon: Users },
   ] as const;
