@@ -844,10 +844,12 @@ export default function Portal() {
             setDocuments={setDocuments}
             payments={payments}
             jobs={jobs}
+            customers={customers}
             catalogItems={items}
             demo={demo}
             reload={loadData}
             show={show}
+            onCreateCustomer={createCustomer}
           />
         )}
         {view === "invoices" && (
@@ -857,10 +859,12 @@ export default function Portal() {
             setDocuments={setDocuments}
             payments={payments}
             jobs={jobs}
+            customers={customers}
             catalogItems={items}
             demo={demo}
             reload={loadData}
             show={show}
+            onCreateCustomer={createCustomer}
           />
         )}
         {view === "expenses" && (
@@ -2474,26 +2478,41 @@ function Documents({
   setDocuments,
   payments,
   jobs,
+  customers,
   catalogItems,
   demo,
   reload,
   show,
+  onCreateCustomer,
 }: {
   mode: "quotation" | "invoice";
   documents: FinancialDocument[];
   setDocuments: React.Dispatch<React.SetStateAction<FinancialDocument[]>>;
   payments: Payment[];
   jobs: Job[];
+  customers: Customer[];
   catalogItems: Item[];
   demo: boolean;
   reload: () => Promise<void>;
   show: (k: "success" | "error", t: string) => void;
+  onCreateCustomer: (customer: {
+    name: string;
+    phone: string;
+    email: string;
+    contact_person: string;
+  }) => Promise<Customer>;
 }) {
   const [open, setOpen] = useState(false);
   const [editingDoc, setEditingDoc] = useState<FinancialDocument | null>(null);
   const [viewingDoc, setViewingDoc] = useState<FinancialDocument | null>(null);
   const [payingInvoice, setPayingInvoice] =
     useState<FinancialDocument | null>(null);
+  const customerListId = useId();
+  const [customerName, setCustomerName] = useState("");
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+  const [customerOpen, setCustomerOpen] = useState(false);
+  const [customerError, setCustomerError] = useState("");
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [invoiceStatus, setInvoiceStatus] = useState<
     "outstanding" | "all" | "unpaid" | "part_paid" | "paid"
   >("outstanding");
@@ -2539,14 +2558,29 @@ function Documents({
   );
   const reset = () => {
     setOpen(false);
+    setCustomerOpen(false);
+    setCustomerName("");
+    setSelectedCustomerId(null);
+    setCustomerError("");
     setItems([
       { item_id: null, description: "", detail: null, quantity: 1, rate: 0, position: 1 },
     ]);
+  };
+  const selectCustomer = (customer: Customer) => {
+    setCustomerName(customer.name);
+    setSelectedCustomerId(customer.id);
+    setCustomerError("");
   };
   const save = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = Object.fromEntries(new FormData(e.currentTarget));
     try {
+      if (!selectedCustomerId) {
+        setCustomerError(
+          "Select an existing customer or create a new customer first.",
+        );
+        return;
+      }
       if (demo) {
         show("success", "Document simulated in preview mode");
         reset();
@@ -2966,11 +3000,20 @@ function Documents({
                       const j = jobs.find((x) => x.id === e.target.value);
                       const form = e.currentTarget.form;
                       if (j && form) {
-                        (
-                          form.elements.namedItem(
-                            "customer_name",
-                          ) as HTMLInputElement
-                        ).value = j.customer_name;
+                        const customer = customers.find(
+                          (candidate) =>
+                            candidate.id === j.customer_id ||
+                            candidate.name.trim().toLocaleLowerCase() ===
+                              j.customer_name.trim().toLocaleLowerCase(),
+                        );
+                        if (customer) selectCustomer(customer);
+                        else {
+                          setCustomerName(j.customer_name);
+                          setSelectedCustomerId(null);
+                          setCustomerError(
+                            "This job's customer is not in the customer database. Create the customer first.",
+                          );
+                        }
                         (
                           form.elements.namedItem("subject") as HTMLInputElement
                         ).value = j.description;
@@ -2985,8 +3028,52 @@ function Documents({
                     ))}
                   </select>
                 </Field>
-                <Field label="Customer name">
-                  <input name="customer_name" required />
+                <Field label="Customer name" wide>
+                  <div className="customerPicker">
+                    <input
+                      name="customer_name"
+                      required
+                      list={customerListId}
+                      placeholder="Search customer name"
+                      value={customerName}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        const match = customers.find(
+                          (customer) =>
+                            customer.name.toLocaleLowerCase() ===
+                            value.trim().toLocaleLowerCase(),
+                        );
+                        if (match) selectCustomer(match);
+                        else {
+                          setCustomerName(value);
+                          setSelectedCustomerId(null);
+                          setCustomerError("");
+                        }
+                      }}
+                    />
+                    <datalist id={customerListId}>
+                      {customers.map((customer) => (
+                        <option key={customer.id} value={customer.name}>
+                          {[customer.contact_person, customer.phone]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </option>
+                      ))}
+                    </datalist>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => {
+                        setCustomerError("");
+                        setCustomerOpen(true);
+                      }}
+                    >
+                      <Plus /> New customer
+                    </button>
+                  </div>
+                  {customerError && (
+                    <small className="fieldError">{customerError}</small>
+                  )}
                 </Field>
                 <Field label="Customer address" wide>
                   <textarea name="customer_address" rows={2} />
@@ -3152,6 +3239,71 @@ function Documents({
                 Create {kind}
               </button>
             </footer>
+          </form>
+        </div>
+      )}
+      {customerOpen && (
+        <div className="modal">
+          <form
+            className="smallModal"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setCreatingCustomer(true);
+              setCustomerError("");
+              try {
+                const data = new FormData(event.currentTarget);
+                const customer = await onCreateCustomer({
+                  name: String(data.get("name") || ""),
+                  phone: String(data.get("phone") || ""),
+                  email: String(data.get("email") || ""),
+                  contact_person: String(data.get("contact_person") || ""),
+                });
+                selectCustomer(customer);
+                setCustomerOpen(false);
+              } catch (error) {
+                setCustomerError(
+                  error instanceof Error
+                    ? error.message
+                    : "Unable to create customer.",
+                );
+              } finally {
+                setCreatingCustomer(false);
+              }
+            }}
+          >
+            <header>
+              <div>
+                <span className="eyebrow">NEW CUSTOMER</span>
+                <h2>Add customer to the directory</h2>
+              </div>
+              <button
+                type="button"
+                className="iconBtn"
+                onClick={() => setCustomerOpen(false)}
+              >
+                <X />
+              </button>
+            </header>
+            <Field label="Customer name">
+              <input name="name" required autoFocus defaultValue={customerName} />
+            </Field>
+            <Field label="Contact person">
+              <input name="contact_person" />
+            </Field>
+            <Field label="Phone">
+              <input name="phone" />
+            </Field>
+            <Field label="Email address (optional)">
+              <input name="email" type="email" />
+            </Field>
+            {customerError && <div className="warning">{customerError}</div>}
+            <button
+              className="primary customerCreate"
+              type="submit"
+              disabled={creatingCustomer}
+            >
+              {creatingCustomer ? "Creating…" : "Create and select customer"}
+            </button>
           </form>
         </div>
       )}
