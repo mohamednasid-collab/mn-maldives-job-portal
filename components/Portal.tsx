@@ -561,6 +561,8 @@ export default function Portal() {
         : undefined;
       const enteredProduction =
         input.status === "production" && previousJob?.status !== "production";
+      const needsAutomaticInvoice =
+        enteredProduction && !input.invoice_number?.trim();
       const payload = {
         customer_id: input.customer_id,
         customer_name: input.customer_name,
@@ -600,7 +602,7 @@ export default function Portal() {
         if (itemError) throw itemError;
       }
       let automaticInvoiceNumber: string | undefined;
-      if (enteredProduction && saved?.id) {
+      if (needsAutomaticInvoice && saved?.id) {
         const { data: invoice, error: invoiceError } = await sb.rpc(
           "create_production_invoice",
           { target_job_id: saved.id },
@@ -610,7 +612,7 @@ export default function Portal() {
       }
       setEditing(undefined);
       await loadData();
-      if (enteredProduction && saved?.id) {
+      if (needsAutomaticInvoice && saved?.id) {
         const response = await fetch("/api/notifications/finance", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1953,6 +1955,10 @@ function JobDrawer({
                 onChange={(e) => {
                   const next = e.target.value as JobStatus;
                   if (next === "production" && form.status !== "production") {
+                    if (form.invoice_number?.trim()) {
+                      set("status", "production");
+                      return;
+                    }
                     setProductionRows([{ selection: "", quantity: 1 }]);
                     setProductionError("");
                     setProductionOpen(true);
