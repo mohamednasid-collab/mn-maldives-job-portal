@@ -2959,10 +2959,13 @@ function Documents({
                 converted = documents.some(
                   (x) => x.source_quotation_id === d.id,
                 ),
-                paymentLocked =
+                hasPayments =
                   d.document_type === "invoice" &&
-                  (Number(d.advance_payment || 0) > 0 ||
-                    payments.some((payment) => payment.invoice_id === d.id));
+                  documentPayments(d) > 0,
+                fullyPaid =
+                  d.document_type === "invoice" &&
+                  total > 0 &&
+                  documentPayments(d) >= total;
               return (
                 <tr key={d.id}>
                   <td data-label="Number">
@@ -2984,12 +2987,12 @@ function Documents({
                     <select
                       className={`statusSelect ${d.status}`}
                       value={d.status}
-                      disabled={converted || paymentLocked}
+                      disabled={converted || fullyPaid}
                       title={
                         converted
                           ? "Converted quotations are locked"
-                          : paymentLocked
-                            ? "Invoices with recorded payments are locked"
+                          : fullyPaid
+                            ? "Fully paid invoices are locked"
                             : undefined
                       }
                       onChange={(e) =>
@@ -3017,7 +3020,7 @@ function Documents({
                       >
                         <Printer /> Print / PDF
                       </button>
-                      {!d.voided_at && !converted && !paymentLocked && (
+                      {!d.voided_at && !converted && !fullyPaid && (
                         <button
                           className="secondary compact"
                           onClick={() => setEditingDoc(d)}
@@ -3038,8 +3041,8 @@ function Documents({
                         <button
                           className="danger compact"
                           type="button"
-                          disabled={paymentLocked}
-                          title={paymentLocked ? "Invoices with payments cannot be voided" : undefined}
+                          disabled={hasPayments}
+                          title={hasPayments ? "Invoices with payments cannot be voided" : undefined}
                           onClick={() => setInvoiceAction({ invoice: d, action: "void" })}
                         >
                           Void
@@ -3049,8 +3052,8 @@ function Documents({
                         <button
                           className="danger compact"
                           type="button"
-                          disabled={paymentLocked}
-                          title={paymentLocked ? "Invoices with payments cannot be deleted" : undefined}
+                          disabled={hasPayments}
+                          title={hasPayments ? "Invoices with payments cannot be deleted" : undefined}
                           onClick={() => setInvoiceAction({ invoice: d, action: "delete" })}
                         >
                           <Trash2 /> Delete
@@ -3642,24 +3645,54 @@ function DocumentEditor({
           ? Number(form.advance_payment) || 0
           : 0;
       const invoiceTotal = subtotal * (1 - discountPercent / 100);
-      if (advancePayment < 0 || advancePayment > invoiceTotal) {
-        show("error", "Advance payment cannot exceed the invoice total");
+      const totalReceived = advancePayment + Number(document.amount_paid || 0);
+      if (advancePayment < 0 || totalReceived > invoiceTotal) {
+        show("error", "Invoice total cannot be lower than payments received");
         return;
       }
       const sb = createClient();
+      const documentPayload = {
+        job_id: form.job_id || null,
+        customer_name: form.customer_name,
+        customer_address: form.customer_address || null,
+        subject: form.subject || null,
+        issue_date: form.issue_date,
+        due_date: form.due_date || null,
+        terms: form.terms || "Due on Receipt",
+        discount_percent: discountPercent,
+        notes: form.notes || null,
+      };
+      if (document.document_type === "invoice") {
+        const { error } = await sb.rpc("update_invoice", {
+          target_invoice_id: document.id,
+          invoice_job_id: documentPayload.job_id,
+          invoice_customer_name: documentPayload.customer_name,
+          invoice_customer_address: documentPayload.customer_address,
+          invoice_subject: documentPayload.subject,
+          invoice_issue_date: documentPayload.issue_date,
+          invoice_due_date: documentPayload.due_date,
+          invoice_terms: documentPayload.terms,
+          invoice_discount_percent: discountPercent,
+          invoice_advance_payment: advancePayment,
+          invoice_notes: documentPayload.notes,
+          invoice_items: items.map((item, index) => ({
+            item_id: item.item_id,
+            position: index + 1,
+            description: item.description,
+            detail: item.detail || null,
+            quantity: Number(item.quantity),
+            rate: Number(item.rate),
+          })),
+        });
+        if (error) throw error;
+        onClose();
+        await reload();
+        show("success", `${document.document_number} updated`);
+        return;
+      }
       const { error } = await sb
         .from("financial_documents")
-        .update({
-          job_id: form.job_id || null,
-          customer_name: form.customer_name,
-          customer_address: form.customer_address || null,
-          subject: form.subject || null,
-          issue_date: form.issue_date,
-          due_date: form.due_date || null,
-          terms: form.terms || "Due on Receipt",
-          discount_percent: discountPercent,
-          notes: form.notes || null,
-        })
+        .update(documentPayload)
         .eq("id", document.id);
       if (error) throw error;
       const { error: deleteError } = await sb
@@ -3695,13 +3728,6 @@ function DocumentEditor({
             })),
           );
         throw itemError;
-      }
-      if (document.document_type === "invoice") {
-        const { error: advanceError } = await sb
-          .from("financial_documents")
-          .update({ advance_payment: advancePayment })
-          .eq("id", document.id);
-        if (advanceError) throw advanceError;
       }
       onClose();
       await reload();
