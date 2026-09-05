@@ -3025,7 +3025,7 @@ function Documents({
                           Edit
                         </button>
                       )}
-                      {d.document_type === "invoice" && !d.voided_at && canManageInvoiceLifecycle && (
+                      {d.document_type === "invoice" && !d.voided_at && (
                         <button
                           className="primary compact"
                           disabled={balance <= 0}
@@ -3034,7 +3034,7 @@ function Documents({
                           {balance <= 0 ? "Paid" : "Record payment"}
                         </button>
                       )}
-                      {d.document_type === "invoice" && !d.voided_at && (
+                      {d.document_type === "invoice" && !d.voided_at && canManageInvoiceLifecycle && (
                         <button
                           className="danger compact"
                           type="button"
