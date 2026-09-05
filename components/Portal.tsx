@@ -239,6 +239,7 @@ const labels: Record<string, string> = {
   completed: "Completed",
   part_paid: "Part-paid",
   paid: "Paid",
+  voided: "Voided",
   quotation: "Quotation",
   invoice: "Invoice",
   super_admin: "Super admin",
@@ -258,6 +259,10 @@ const documentTotal = (document: FinancialDocument) => {
   );
   return subtotal * (1 - Number(document.discount_percent) / 100);
 };
+const documentPayments = (document: FinancialDocument) =>
+  Number(document.advance_payment || 0) + Number(document.amount_paid || 0);
+const documentBalance = (document: FinancialDocument) =>
+  Math.max(0, documentTotal(document) - documentPayments(document));
 const initials = (n: string) =>
   n
     .split(/\s+/)
@@ -383,7 +388,7 @@ export default function Portal() {
       sb
         .from("payments")
         .select(
-          "*,invoice:financial_documents!payments_invoice_id_fkey(id,document_number,customer_name,job_id,discount_percent,amount_paid,items:financial_document_items(*))",
+          "*,invoice:financial_documents!payments_invoice_id_fkey(id,document_number,customer_name,job_id,discount_percent,advance_payment,amount_paid,voided_at,items:financial_document_items(*))",
         )
         .order("payment_date", { ascending: false }),
       sb
@@ -848,6 +853,7 @@ export default function Portal() {
             jobs={jobs}
             customers={customers}
             catalogItems={items}
+            role={profile?.role || "staff"}
             demo={demo}
             reload={loadData}
             show={show}
@@ -863,6 +869,7 @@ export default function Portal() {
             jobs={jobs}
             customers={customers}
             catalogItems={items}
+            role={profile?.role || "staff"}
             demo={demo}
             reload={loadData}
             show={show}
@@ -1232,7 +1239,7 @@ function Customers({
         );
         const invoices = documents.filter(
           (document) =>
-            document.document_type === "invoice" &&
+            document.document_type === "invoice" && !document.voided_at &&
             ((document.job_id && jobIds.has(document.job_id)) ||
               (!document.job_id &&
                 normalizeName(document.customer_name) ===
@@ -1246,7 +1253,7 @@ function Customers({
           totalDue: invoices.reduce(
             (total, invoice) =>
               total +
-              Math.max(0, documentTotal(invoice) - Number(invoice.amount_paid)),
+              documentBalance(invoice),
             0,
           ),
         };
@@ -1604,9 +1611,16 @@ function Payments({
   setSearch: (s: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const invoices = documents.filter((d) => d.document_type === "invoice");
+  const invoices = documents.filter(
+    (d) => d.document_type === "invoice" && !d.voided_at,
+  );
   const invoiced = invoices.reduce((total, invoice) => total + documentTotal(invoice), 0);
-  const paid = payments.reduce((total, payment) => total + Number(payment.amount), 0);
+  const paid =
+    payments.reduce((total, payment) => total + Number(payment.amount), 0) +
+    invoices.reduce(
+      (total, invoice) => total + Number(invoice.advance_payment || 0),
+      0,
+    );
   const filteredPayments = payments.filter((payment) => {
     const term = search.toLowerCase();
     return (
@@ -1713,7 +1727,7 @@ function Payments({
                 <select name="invoice_id" required defaultValue="">
                   <option value="" disabled>Select invoice</option>
                   {invoices.map((invoice) => {
-                    const balance = Math.max(0, documentTotal(invoice) - Number(invoice.amount_paid));
+                    const balance = documentBalance(invoice);
                     return <option key={invoice.id} value={invoice.id} disabled={balance <= 0}>{invoice.document_number} · {invoice.customer_name} · Balance {money(balance)}</option>;
                   })}
                 </select>
@@ -2486,6 +2500,7 @@ function Documents({
   jobs,
   customers,
   catalogItems,
+  role,
   demo,
   reload,
   show,
@@ -2498,6 +2513,7 @@ function Documents({
   jobs: Job[];
   customers: Customer[];
   catalogItems: Item[];
+  role: AppRole;
   demo: boolean;
   reload: () => Promise<void>;
   show: (k: "success" | "error", t: string) => void;
@@ -2513,6 +2529,10 @@ function Documents({
   const [viewingDoc, setViewingDoc] = useState<FinancialDocument | null>(null);
   const [payingInvoice, setPayingInvoice] =
     useState<FinancialDocument | null>(null);
+  const [invoiceAction, setInvoiceAction] = useState<{
+    invoice: FinancialDocument;
+    action: "void" | "delete";
+  } | null>(null);
   const customerListId = useId();
   const [customerName, setCustomerName] = useState("");
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
@@ -2520,12 +2540,13 @@ function Documents({
   const [customerError, setCustomerError] = useState("");
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [invoiceStatus, setInvoiceStatus] = useState<
-    "outstanding" | "all" | "unpaid" | "part_paid" | "paid"
+    "outstanding" | "all" | "unpaid" | "part_paid" | "paid" | "voided"
   >("outstanding");
   const [quotationStatus, setQuotationStatus] = useState<
     "all" | "draft" | "sent" | "invoiced"
   >("all");
   const kind = mode;
+  const canManageInvoiceLifecycle = ["super_admin", "admin", "finance"].includes(role);
   const visibleDocuments = documents.filter((document) => {
     if (document.document_type !== mode) return false;
     if (mode === "quotation") {
@@ -2536,8 +2557,9 @@ function Documents({
       if (quotationStatus === "invoiced") return invoiced;
       return !invoiced && document.status === quotationStatus;
     }
+    if (document.voided_at) return invoiceStatus === "all" || invoiceStatus === "voided";
     const total = documentTotal(document);
-    const amountPaid = Number(document.amount_paid);
+    const amountPaid = documentPayments(document);
     const paymentStatus =
       amountPaid >= total
         ? "paid"
@@ -2556,12 +2578,20 @@ function Documents({
     0,
   );
   const totalInvoiced = documents
-    .filter((document) => document.document_type === "invoice")
+    .filter(
+      (document) => document.document_type === "invoice" && !document.voided_at,
+    )
     .reduce((total, invoice) => total + documentTotal(invoice), 0);
-  const paymentsReceived = payments.reduce(
-    (total, payment) => total + Number(payment.amount),
-    0,
-  );
+  const paymentsReceived =
+    payments.reduce((total, payment) => total + Number(payment.amount), 0) +
+    documents
+      .filter(
+        (document) => document.document_type === "invoice" && !document.voided_at,
+      )
+      .reduce(
+        (total, invoice) => total + Number(invoice.advance_payment || 0),
+        0,
+      );
   const reset = () => {
     setOpen(false);
     setCustomerOpen(false);
@@ -2596,6 +2626,13 @@ function Documents({
         show("error", "Select every invoice item from the Items database");
         return;
       }
+      const discountPercent = Number(form.discount_percent) || 0;
+      const advancePayment = kind === "invoice" ? Number(form.advance_payment) || 0 : 0;
+      const invoiceTotal = subtotal * (1 - discountPercent / 100);
+      if (advancePayment < 0 || advancePayment > invoiceTotal) {
+        show("error", "Advance payment cannot exceed the invoice total");
+        return;
+      }
       const sb = createClient();
       const { data: doc, error } = await sb
         .from("financial_documents")
@@ -2610,7 +2647,8 @@ function Documents({
           issue_date: form.issue_date,
           due_date: form.due_date || null,
           terms: form.terms || "Due on Receipt",
-          discount_percent: Number(form.discount_percent) || 0,
+          discount_percent: discountPercent,
+          advance_payment: 0,
           amount_paid: 0,
           notes: form.notes || null,
         })
@@ -2631,8 +2669,28 @@ function Documents({
           })),
         );
       if (itemError) {
-        await sb.from("financial_documents").delete().eq("id", doc.id);
+        if (kind === "invoice") {
+          await sb.rpc("delete_invoice", {
+            target_invoice_id: doc.id,
+            reason: "Automatic cleanup after line item creation failed",
+          });
+        } else {
+          await sb.from("financial_documents").delete().eq("id", doc.id);
+        }
         throw itemError;
+      }
+      if (advancePayment > 0) {
+        const { error: advanceError } = await sb
+          .from("financial_documents")
+          .update({ advance_payment: advancePayment })
+          .eq("id", doc.id);
+        if (advanceError) {
+          await sb.rpc("delete_invoice", {
+            target_invoice_id: doc.id,
+            reason: "Automatic cleanup after advance payment validation failed",
+          });
+          throw advanceError;
+        }
       }
       reset();
       await reload();
@@ -2713,6 +2771,44 @@ function Documents({
       );
     }
   };
+  const applyInvoiceAction = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!invoiceAction) return;
+    const reason = String(new FormData(event.currentTarget).get("reason") || "").trim();
+    if (!reason) {
+      show("error", "Enter a reason");
+      return;
+    }
+    const { invoice, action } = invoiceAction;
+    try {
+      if (demo) {
+        setDocuments((current) =>
+          action === "delete"
+            ? current.filter((document) => document.id !== invoice.id)
+            : current.map((document) =>
+                document.id === invoice.id
+                  ? { ...document, voided_at: new Date().toISOString(), void_reason: reason }
+                  : document,
+              ),
+        );
+      } else {
+        const { error } = await createClient().rpc(`${action}_invoice`, {
+          target_invoice_id: invoice.id,
+          reason,
+        });
+        if (error) throw error;
+        await reload();
+      }
+      setInvoiceAction(null);
+      if (viewingDoc?.id === invoice.id) setViewingDoc(null);
+      show("success", `${invoice.document_number} ${action === "void" ? "voided" : "deleted"}`);
+    } catch (error) {
+      show(
+        "error",
+        error instanceof Error ? error.message : `Unable to ${action} invoice`,
+      );
+    }
+  };
   const convert = async (q: FinancialDocument) => {
     if (documents.some((d) => d.source_quotation_id === q.id)) {
       show("error", "This quotation has already been converted");
@@ -2760,7 +2856,10 @@ function Documents({
           })),
         );
       if (itemError) {
-        await sb.from("financial_documents").delete().eq("id", invoice.id);
+        await sb.rpc("delete_invoice", {
+          target_invoice_id: invoice.id,
+          reason: "Automatic cleanup after quotation conversion failed",
+        });
         throw itemError;
       }
       await reload();
@@ -2814,7 +2913,8 @@ function Documents({
                     | "all"
                     | "unpaid"
                     | "part_paid"
-                    | "paid",
+                    | "paid"
+                    | "voided",
                 )
               }
             >
@@ -2823,6 +2923,7 @@ function Documents({
               <option value="unpaid">Unpaid</option>
               <option value="part_paid">Part-paid</option>
               <option value="paid">Paid</option>
+              <option value="voided">Voided</option>
             </select>
           )}
           <button
@@ -2854,13 +2955,14 @@ function Documents({
                   0,
                 ),
                 total = sub * (1 - Number(d.discount_percent) / 100),
-                balance = Math.max(0, total - Number(d.amount_paid)),
+                balance = documentBalance(d),
                 converted = documents.some(
                   (x) => x.source_quotation_id === d.id,
                 ),
                 paymentLocked =
                   d.document_type === "invoice" &&
-                  payments.some((payment) => payment.invoice_id === d.id);
+                  (Number(d.advance_payment || 0) > 0 ||
+                    payments.some((payment) => payment.invoice_id === d.id));
               return (
                 <tr key={d.id}>
                   <td data-label="Number">
@@ -2876,6 +2978,9 @@ function Documents({
                     <StatusPill value={d.document_type} />
                   </td>
                   <td data-label="Status">
+                    {d.voided_at ? (
+                      <StatusPill value="voided" />
+                    ) : (
                     <select
                       className={`statusSelect ${d.status}`}
                       value={d.status}
@@ -2894,6 +2999,7 @@ function Documents({
                       <option value="draft">Draft</option>
                       <option value="sent">Sent</option>
                     </select>
+                    )}
                   </td>
                   <td data-label="Customer">
                     <strong>{d.customer_name}</strong>
@@ -2911,7 +3017,7 @@ function Documents({
                       >
                         <Printer /> Print / PDF
                       </button>
-                      {!converted && !paymentLocked && (
+                      {!d.voided_at && !converted && !paymentLocked && (
                         <button
                           className="secondary compact"
                           onClick={() => setEditingDoc(d)}
@@ -2919,13 +3025,35 @@ function Documents({
                           Edit
                         </button>
                       )}
-                      {d.document_type === "invoice" && (
+                      {d.document_type === "invoice" && !d.voided_at && canManageInvoiceLifecycle && (
                         <button
                           className="primary compact"
                           disabled={balance <= 0}
                           onClick={() => setPayingInvoice(d)}
                         >
                           {balance <= 0 ? "Paid" : "Record payment"}
+                        </button>
+                      )}
+                      {d.document_type === "invoice" && !d.voided_at && (
+                        <button
+                          className="danger compact"
+                          type="button"
+                          disabled={paymentLocked}
+                          title={paymentLocked ? "Invoices with payments cannot be voided" : undefined}
+                          onClick={() => setInvoiceAction({ invoice: d, action: "void" })}
+                        >
+                          Void
+                        </button>
+                      )}
+                      {d.document_type === "invoice" && canManageInvoiceLifecycle && (
+                        <button
+                          className="danger compact"
+                          type="button"
+                          disabled={paymentLocked}
+                          title={paymentLocked ? "Invoices with payments cannot be deleted" : undefined}
+                          onClick={() => setInvoiceAction({ invoice: d, action: "delete" })}
+                        >
+                          <Trash2 /> Delete
                         </button>
                       )}
                       {d.document_type === "quotation" && (
@@ -2968,14 +3096,38 @@ function Documents({
             </header>
             <div className="formGrid">
               <Field label="Customer" wide><input value={payingInvoice.customer_name} readOnly /></Field>
-              <Field label="Outstanding balance" wide><input value={money(Math.max(0, documentTotal(payingInvoice) - Number(payingInvoice.amount_paid)))} readOnly /></Field>
+              <Field label="Outstanding balance" wide><input value={money(documentBalance(payingInvoice))} readOnly /></Field>
               <Field label="Payment date"><input name="payment_date" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} /></Field>
-              <Field label="Amount"><input name="amount" type="number" min="0.01" max={Math.max(0, documentTotal(payingInvoice) - Number(payingInvoice.amount_paid))} step="0.01" required /></Field>
+              <Field label="Amount"><input name="amount" type="number" min="0.01" max={documentBalance(payingInvoice)} step="0.01" required /></Field>
               <Field label="Payment method"><select name="payment_method"><option value="Bank transfer">Bank transfer</option><option value="Cash">Cash</option><option value="Cheque">Cheque</option><option value="Card">Card</option><option value="Other">Other</option></select></Field>
               <Field label="Reference"><input name="reference" placeholder="Transfer or receipt reference" /></Field>
               <Field label="Notes" wide><textarea name="notes" rows={3} /></Field>
             </div>
             <footer><button type="button" className="secondary" onClick={() => setPayingInvoice(null)}>Cancel</button><button className="primary" type="submit">Record payment</button></footer>
+          </form>
+        </div>
+      )}
+      {invoiceAction && (
+        <div className="modal">
+          <form className="smallModal" onSubmit={applyInvoiceAction}>
+            <header>
+              <div>
+                <span className="eyebrow">{invoiceAction.action.toUpperCase()} INVOICE</span>
+                <h2>{invoiceAction.invoice.document_number}</h2>
+              </div>
+              <button type="button" className="iconBtn" onClick={() => setInvoiceAction(null)}><X /></button>
+            </header>
+            <div className="warning">
+              {invoiceAction.action === "void"
+                ? "The invoice will remain in the records and be marked void."
+                : "The invoice will be permanently removed. The deletion reason will remain in the audit log."}
+            </div>
+            <Field label="Reason">
+              <textarea name="reason" rows={4} required autoFocus placeholder={`Reason for ${invoiceAction.action}ing this invoice`} />
+            </Field>
+            <button className="danger" type="submit">
+              Confirm {invoiceAction.action === "void" ? "void" : "delete"}
+            </button>
           </form>
         </div>
       )}
@@ -3124,6 +3276,17 @@ function Documents({
                     defaultValue="0"
                   />
                 </Field>
+                {kind === "invoice" && (
+                  <Field label="Advance payment (MVR)">
+                    <input
+                      name="advance_payment"
+                      type="number"
+                      min="0"
+                      step=".01"
+                      defaultValue="0"
+                    />
+                  </Field>
+                )}
               </div>
             </FormSection>
             <FormSection title="Items">
@@ -3336,7 +3499,7 @@ function DocumentViewer({
   onClose: () => void;
 }) {
   const total = documentTotal(document);
-  const balance = Math.max(0, total - Number(document.amount_paid));
+  const balance = documentBalance(document);
   return (
     <div
       className="modal"
@@ -3367,7 +3530,9 @@ function DocumentViewer({
               {document.due_date ? formatDate(document.due_date) : "—"}
             </strong>
             <span>Status</span>
-            <strong>{labels[document.status] || document.status}</strong>
+            <strong>
+              {document.voided_at ? labels.voided : labels[document.status] || document.status}
+            </strong>
           </div>
         </FormSection>
         <FormSection title="Items">
@@ -3393,7 +3558,9 @@ function DocumentViewer({
             <strong>{money(total)}</strong>
             {document.document_type === "invoice" && (
               <>
-                <span>Paid</span>
+                <span>Advance payment</span>
+                <strong>{money(Number(document.advance_payment || 0))}</strong>
+                <span>Other payments</span>
                 <strong>{money(Number(document.amount_paid))}</strong>
                 <span>Balance</span>
                 <strong>{money(balance)}</strong>
@@ -3404,6 +3571,14 @@ function DocumentViewer({
         {document.notes && (
           <FormSection title="Notes">
             <p className="documentViewNotes">{document.notes}</p>
+          </FormSection>
+        )}
+        {document.voided_at && (
+          <FormSection title="Void details">
+            <p className="documentViewNotes">
+              <strong>Voided {formatDate(document.voided_at.slice(0, 10))}</strong><br />
+              {document.void_reason}
+            </p>
           </FormSection>
         )}
         <footer>
@@ -3461,6 +3636,16 @@ function DocumentEditor({
         show("error", "Select every invoice item from the Items database");
         return;
       }
+      const discountPercent = Number(form.discount_percent) || 0;
+      const advancePayment =
+        document.document_type === "invoice"
+          ? Number(form.advance_payment) || 0
+          : 0;
+      const invoiceTotal = subtotal * (1 - discountPercent / 100);
+      if (advancePayment < 0 || advancePayment > invoiceTotal) {
+        show("error", "Advance payment cannot exceed the invoice total");
+        return;
+      }
       const sb = createClient();
       const { error } = await sb
         .from("financial_documents")
@@ -3472,7 +3657,7 @@ function DocumentEditor({
           issue_date: form.issue_date,
           due_date: form.due_date || null,
           terms: form.terms || "Due on Receipt",
-          discount_percent: Number(form.discount_percent) || 0,
+          discount_percent: discountPercent,
           notes: form.notes || null,
         })
         .eq("id", document.id);
@@ -3510,6 +3695,13 @@ function DocumentEditor({
             })),
           );
         throw itemError;
+      }
+      if (document.document_type === "invoice") {
+        const { error: advanceError } = await sb
+          .from("financial_documents")
+          .update({ advance_payment: advancePayment })
+          .eq("id", document.id);
+        if (advanceError) throw advanceError;
       }
       onClose();
       await reload();
@@ -3602,6 +3794,17 @@ function DocumentEditor({
                 defaultValue={document.discount_percent}
               />
             </Field>
+            {document.document_type === "invoice" && (
+              <Field label="Advance payment (MVR)">
+                <input
+                  name="advance_payment"
+                  type="number"
+                  min="0"
+                  step=".01"
+                  defaultValue={document.advance_payment || 0}
+                />
+              </Field>
+            )}
           </div>
         </FormSection>
         <FormSection title="Items">
@@ -3957,7 +4160,9 @@ function printDocument(d: FinancialDocument) {
     ),
     discount = (sub * Number(d.discount_percent)) / 100,
     total = sub - discount,
-    balance = Math.max(0, total - Number(d.amount_paid));
+    advance = Number(d.advance_payment || 0),
+    paid = Number(d.amount_paid || 0),
+    balance = Math.max(0, total - advance - paid);
   const rows = [...d.items]
     .sort((a, b) => a.position - b.position)
     .map(
@@ -3976,8 +4181,8 @@ function printDocument(d: FinancialDocument) {
   if (!w) return;
   w.document.write(
     `<!doctype html><html><head><title>${escapeHtml(d.document_number)}</title><style>
-      @page{size:A4;margin:0}*{box-sizing:border-box}html,body{margin:0;width:210mm;min-height:297mm}body{color:#1d304d;font:12px Georgia,"Times New Roman",serif}body.invoice,body.invoice *{font-family:Arial,Helvetica,sans-serif!important;font-weight:400!important;font-style:normal!important}.page{width:210mm;min-height:297mm;padding:18mm 20mm 16mm;display:flex;flex-direction:column}.head{display:flex;justify-content:space-between;gap:40px}.brand img{display:block;width:118px;height:auto}.company{margin-top:20px;line-height:1.42}.title{text-align:right;color:#1d304d}.title h1{font-size:34px;line-height:1;margin:0 0 7px;font-weight:500;color:#111}.title .number{display:block;font-weight:700}.balance{margin-top:20px}.balance span{display:block;margin-bottom:4px}.balance strong{font-size:17px}.dates{margin:82px 0 0 auto;display:grid;grid-template-columns:auto auto;gap:5px 8px;text-align:right}.customer{font-weight:700;margin:8px 0 48px;color:#222;line-height:1.45}.subject{margin:0 0 18px}.subject b{display:block;font-weight:400}.subject span{display:block;margin-top:2px;color:#222}table{width:100%;border-collapse:collapse;color:#1d304d}th,td{border:1px solid #444;padding:6px 9px}th{font-weight:400;text-align:center}th:nth-child(1),td:nth-child(1){width:5%;text-align:center}th:nth-child(2),td:nth-child(2){width:53%}th:nth-child(n+3),td:nth-child(n+3){width:14%;text-align:center}td small{display:block;color:#666;margin-top:3px}.totals{width:38%;margin:12px 2% 24px auto;color:#111;border-top:1px solid #bbb}.totals>div{display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:20px;padding:5px 2px;font-size:12px;line-height:1.35}.totals .grand{font-size:12px;font-weight:700;border-top:1px solid #ddd}.totals .grand span{font-weight:700;text-align:right}.bank{margin-top:auto;color:#333;line-height:1.38}.bank b{text-decoration:underline}.notes{margin-top:30px;white-space:pre-line;color:#333}@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-    </style></head><body class="${isInvoice ? "invoice" : "quotation"}"><main class="page"><div class="head"><div class="brand"><img src="${escapeHtml(logoUrl)}" alt="MN Maldives"><div class="company">Flat 159-G-01<br>Hulhumale Kaafu 23000<br>Maldives<br>+960 769 6312</div></div><div class="title"><h1>${isInvoice ? "Invoice" : "Quotation"}</h1><span class="number"># ${escapeHtml(d.document_number)}</span>${isInvoice ? `<div class="balance"><span>Balance Due</span><strong>MVR${moneyValue(balance)}</strong></div>` : ""}<div class="dates"><span>${isInvoice ? "Invoice" : "Quote"} Date :</span><b>${formatDate(d.issue_date)}</b><span>Terms :</span><b>${escapeHtml(d.terms)}</b>${isInvoice ? `<span>Due Date :</span><b>${d.due_date ? formatDate(d.due_date) : "—"}</b>` : ""}</div></div></div><div class="customer">${escapeHtml(d.customer_name)}${d.customer_address ? `<br>${escapeHtml(d.customer_address).replaceAll("\n", "<br>")}` : ""}</div>${d.subject ? `<div class="subject"><b>SUBJECT :</b><span>${escapeHtml(d.subject)}</span></div>` : ""}<table><thead><tr><th>#</th><th>Item / Description</th><th>Rate</th><th>QTY</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table><div class="totals"><div><span>Sub Total</span><span>${moneyValue(sub)}</span></div><div><span>Discount (${Number(d.discount_percent).toFixed(2)}%)</span><span>(-) ${moneyValue(discount)}</span></div><div class="grand">TOTAL<span>MVR${moneyValue(total)}</span></div>${isInvoice ? `<div class="grand">Balance Due<span>MVR${moneyValue(balance)}</span></div>` : ""}</div><div class="bank"><b>Bank of Maldives</b><br>Account Name: MN MALDIVES<br>MVR 7770000140438 - USD 7770000140439<br><b>MIB</b><br>Account Name: MN Ventures<br>MVR 90101440001091000 - USD 90101440001092000</div>${!isInvoice ? `<div class="notes">${escapeHtml(d.notes || "- This quote is valid for a period of 30 days from the quotation date.\n- Half payment will be collected at the beginning of the work and remaining payment must be cleared within 10 days upon completion of the work.\n- Products will be delivered within 7 to 10 days from the confirmation date.").replaceAll("\n", "<br>")}</div>` : ""}</main><script>window.onload=()=>{const logo=document.querySelector("img");if(logo&&!logo.complete){logo.onload=()=>window.print()}else{window.print()}}<\/script></body></html>`,
+      @page{size:A4;margin:0}*{box-sizing:border-box}html,body{margin:0;width:210mm;min-height:297mm}body{color:#1d304d;font:12px Georgia,"Times New Roman",serif}body.invoice,body.invoice *{font-family:Arial,Helvetica,sans-serif!important;font-weight:400!important;font-style:normal!important}.page{width:210mm;min-height:297mm;padding:18mm 20mm 16mm;display:flex;flex-direction:column;position:relative}.voidMark{position:absolute;top:125mm;left:42mm;transform:rotate(-18deg);border:6px solid #b8372c;color:#b8372c;font-size:44px;font-weight:800;padding:10px 22px;opacity:.7}.voidReason{text-align:center;color:#b8372c;margin:0 0 18px}.head{display:flex;justify-content:space-between;gap:40px}.brand img{display:block;width:118px;height:auto}.company{margin-top:20px;line-height:1.42}.title{text-align:right;color:#1d304d}.title h1{font-size:34px;line-height:1;margin:0 0 7px;font-weight:500;color:#111}.title .number{display:block;font-weight:700}.balance{margin-top:20px}.balance span{display:block;margin-bottom:4px}.balance strong{font-size:17px}.dates{margin:82px 0 0 auto;display:grid;grid-template-columns:auto auto;gap:5px 8px;text-align:right}.customer{font-weight:700;margin:8px 0 48px;color:#222;line-height:1.45}.subject{margin:0 0 18px}.subject b{display:block;font-weight:400}.subject span{display:block;margin-top:2px;color:#222}table{width:100%;border-collapse:collapse;color:#1d304d}th,td{border:1px solid #444;padding:6px 9px}th{font-weight:400;text-align:center}th:nth-child(1),td:nth-child(1){width:5%;text-align:center}th:nth-child(2),td:nth-child(2){width:53%}th:nth-child(n+3),td:nth-child(n+3){width:14%;text-align:center}td small{display:block;color:#666;margin-top:3px}.totals{width:38%;margin:12px 2% 24px auto;color:#111;border-top:1px solid #bbb}.totals>div{display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:20px;padding:5px 2px;font-size:12px;line-height:1.35}.totals .grand{font-size:12px;font-weight:700;border-top:1px solid #ddd}.totals .grand span{font-weight:700;text-align:right}.bank{margin-top:auto;color:#333;line-height:1.38}.bank b{text-decoration:underline}.notes{margin-top:30px;white-space:pre-line;color:#333}@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+    </style></head><body class="${isInvoice ? "invoice" : "quotation"}"><main class="page">${d.voided_at ? `<div class="voidMark">VOID</div>` : ""}<div class="head"><div class="brand"><img src="${escapeHtml(logoUrl)}" alt="MN Maldives"><div class="company">Flat 159-G-01<br>Hulhumale Kaafu 23000<br>Maldives<br>+960 769 6312</div></div><div class="title"><h1>${isInvoice ? "Invoice" : "Quotation"}</h1><span class="number"># ${escapeHtml(d.document_number)}</span>${isInvoice ? `<div class="balance"><span>Balance Due</span><strong>MVR${moneyValue(balance)}</strong></div>` : ""}<div class="dates"><span>${isInvoice ? "Invoice" : "Quote"} Date :</span><b>${formatDate(d.issue_date)}</b><span>Terms :</span><b>${escapeHtml(d.terms)}</b>${isInvoice ? `<span>Due Date :</span><b>${d.due_date ? formatDate(d.due_date) : "—"}</b>` : ""}</div></div></div><div class="customer">${escapeHtml(d.customer_name)}${d.customer_address ? `<br>${escapeHtml(d.customer_address).replaceAll("\n", "<br>")}` : ""}</div>${d.voided_at ? `<div class="voidReason">Void reason: ${escapeHtml(d.void_reason)}</div>` : ""}${d.subject ? `<div class="subject"><b>SUBJECT :</b><span>${escapeHtml(d.subject)}</span></div>` : ""}<table><thead><tr><th>#</th><th>Item / Description</th><th>Rate</th><th>QTY</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table><div class="totals"><div><span>Sub Total</span><span>${moneyValue(sub)}</span></div><div><span>Discount (${Number(d.discount_percent).toFixed(2)}%)</span><span>(-) ${moneyValue(discount)}</span></div><div class="grand">TOTAL<span>MVR${moneyValue(total)}</span></div>${isInvoice ? `<div><span>Advance payment</span><span>(-) ${moneyValue(advance)}</span></div><div><span>Other payments</span><span>(-) ${moneyValue(paid)}</span></div><div class="grand">Balance Due<span>MVR${moneyValue(balance)}</span></div>` : ""}</div><div class="bank"><b>Bank of Maldives</b><br>Account Name: MN MALDIVES<br>MVR 7770000140438 - USD 7770000140439<br><b>MIB</b><br>Account Name: MN Ventures<br>MVR 90101440001091000 - USD 90101440001092000</div>${!isInvoice ? `<div class="notes">${escapeHtml(d.notes || "- This quote is valid for a period of 30 days from the quotation date.\n- Half payment will be collected at the beginning of the work and remaining payment must be cleared within 10 days upon completion of the work.\n- Products will be delivered within 7 to 10 days from the confirmation date.").replaceAll("\n", "<br>")}</div>` : ""}</main><script>window.onload=()=>{const logo=document.querySelector("img");if(logo&&!logo.complete){logo.onload=()=>window.print()}else{window.print()}}<\/script></body></html>`,
   );
   w.document.close();
 }
