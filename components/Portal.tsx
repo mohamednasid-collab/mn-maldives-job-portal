@@ -257,7 +257,7 @@ const documentTotal = (document: FinancialDocument) => {
     (total, item) => total + Number(item.quantity) * Number(item.rate),
     0,
   );
-  return subtotal * (1 - Number(document.discount_percent) / 100);
+  return Math.round((subtotal * (1 - Number(document.discount_percent) / 100) + Number.EPSILON) * 100) / 100;
 };
 const documentPayments = (document: FinancialDocument) =>
   Number(document.advance_payment || 0) + Number(document.amount_paid || 0);
@@ -2950,11 +2950,7 @@ function Documents({
           </thead>
           <tbody>
             {visibleDocuments.map((d) => {
-              const sub = d.items.reduce(
-                  (a, i) => a + Number(i.quantity) * Number(i.rate),
-                  0,
-                ),
-                total = sub * (1 - Number(d.discount_percent) / 100),
+              const total = documentTotal(d),
                 balance = documentBalance(d),
                 converted = documents.some(
                   (x) => x.source_quotation_id === d.id,
