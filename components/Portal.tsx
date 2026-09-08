@@ -2542,6 +2542,7 @@ function Documents({
   const [invoiceStatus, setInvoiceStatus] = useState<
     "outstanding" | "all" | "unpaid" | "part_paid" | "paid" | "voided"
   >("outstanding");
+  const [invoiceSearch, setInvoiceSearch] = useState("");
   const [quotationStatus, setQuotationStatus] = useState<
     "all" | "draft" | "sent" | "invoiced"
   >("all");
@@ -2557,6 +2558,19 @@ function Documents({
       if (quotationStatus === "invoiced") return invoiced;
       return !invoiced && document.status === quotationStatus;
     }
+    const searchTerm = invoiceSearch.trim().toLowerCase();
+
+if (searchTerm) {
+  const invoiceNumber = (document.document_number ?? "").toLowerCase();
+  const customerName = (document.customer_name ?? "").toLowerCase();
+
+  if (
+    !invoiceNumber.includes(searchTerm) &&
+    !customerName.includes(searchTerm)
+  ) {
+    return false;
+  }
+}
     if (document.voided_at) return invoiceStatus === "all" || invoiceStatus === "voided";
     const total = documentTotal(document);
     const amountPaid = documentPayments(document);
