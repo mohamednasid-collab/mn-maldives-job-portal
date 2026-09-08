@@ -2559,18 +2559,17 @@ function Documents({
       return !invoiced && document.status === quotationStatus;
     }
     const searchTerm = invoiceSearch.trim().toLowerCase();
+    if (searchTerm) {
+      const invoiceNumber = (document.document_number ?? "").toLowerCase();
+      const customerName = (document.customer_name ?? "").toLowerCase();
 
-if (searchTerm) {
-  const invoiceNumber = (document.document_number ?? "").toLowerCase();
-  const customerName = (document.customer_name ?? "").toLowerCase();
-
-  if (
-    !invoiceNumber.includes(searchTerm) &&
-    !customerName.includes(searchTerm)
-  ) {
-    return false;
-  }
-}
+      if (
+        !invoiceNumber.includes(searchTerm) &&
+        !customerName.includes(searchTerm)
+      ) {
+        return false;
+      }
+    }
     if (document.voided_at) return invoiceStatus === "all" || invoiceStatus === "voided";
     const total = documentTotal(document);
     const amountPaid = documentPayments(document);
@@ -2917,36 +2916,40 @@ if (searchTerm) {
             </select>
           )}
           {mode === "invoice" && (
-      <input
-  type="search"
-  value={invoiceSearch}
-  onChange={(event) => setInvoiceSearch(event.target.value)}
-  placeholder="Search invoice number or customer name"
-  aria-label="Search invoices"
-/>
-            <select
-              aria-label="Filter invoices by payment status"
-<select
-  value={invoiceStatus}
-  onChange={(event) =>
-                setInvoiceStatus(
-                  event.target.value as
-                    | "outstanding"
-                    | "all"
-                    | "unpaid"
-                    | "part_paid"
-                    | "paid"
-                    | "voided",
-                )
-              }
-            >
-              <option value="outstanding">Outstanding</option>
-              <option value="all">All statuses</option>
-              <option value="unpaid">Unpaid</option>
-              <option value="part_paid">Part-paid</option>
-              <option value="paid">Paid</option>
-              <option value="voided">Voided</option>
-            </select>
+            <>
+              <label className="search">
+                <Search />
+                <input
+                  type="search"
+                  value={invoiceSearch}
+                  onChange={(event) => setInvoiceSearch(event.target.value)}
+                  placeholder="Search invoice number or customer name"
+                  aria-label="Search invoices"
+                />
+              </label>
+              <select
+                aria-label="Filter invoices by payment status"
+                value={invoiceStatus}
+                onChange={(event) =>
+                  setInvoiceStatus(
+                    event.target.value as
+                      | "outstanding"
+                      | "all"
+                      | "unpaid"
+                      | "part_paid"
+                      | "paid"
+                      | "voided",
+                  )
+                }
+              >
+                <option value="outstanding">Outstanding</option>
+                <option value="all">All statuses</option>
+                <option value="unpaid">Unpaid</option>
+                <option value="part_paid">Part-paid</option>
+                <option value="paid">Paid</option>
+                <option value="voided">Voided</option>
+              </select>
+            </>
           )}
           <button
             className="primary"
