@@ -2917,10 +2917,18 @@ if (searchTerm) {
             </select>
           )}
           {mode === "invoice" && (
+      <input
+  type="search"
+  value={invoiceSearch}
+  onChange={(event) => setInvoiceSearch(event.target.value)}
+  placeholder="Search invoice number or customer name"
+  aria-label="Search invoices"
+/>
             <select
               aria-label="Filter invoices by payment status"
-              value={invoiceStatus}
-              onChange={(event) =>
+<select
+  value={invoiceStatus}
+  onChange={(event) =>
                 setInvoiceStatus(
                   event.target.value as
                     | "outstanding"
