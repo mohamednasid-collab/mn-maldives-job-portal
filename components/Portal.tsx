@@ -29,6 +29,7 @@ import { createClient } from "@/lib/supabase/client";
 import {
   AppRole,
   Customer,
+  DesignerRecord,
   DocumentItem,
   Expense,
   FactoryRecord,
@@ -212,6 +213,13 @@ const demoFactories: FactoryRecord[] = [
   "CAPTAIN",
   "INC9000",
 ].map((name) => ({ id: name.toLowerCase(), name, active: true }));
+const demoDesigners: DesignerRecord[] = ["Shifa", "Ameen", "Maya"].map(
+  (name, index) => ({
+    id: `demo-designer-${index + 1}`,
+    name,
+    active: true,
+  }),
+);
 const demoCustomers: Customer[] = Array.from(
   new Map(
     demoJobs.map((job) => [
@@ -281,6 +289,7 @@ type View =
   | "invoices"
   | "expenses"
   | "users"
+  | "designers"
   | "factories";
 type ProductionItemInput = { item_id: string; quantity: number };
 type JobSaveInput = Omit<Partial<Job>, "production_items"> & {
@@ -301,6 +310,9 @@ export default function Portal() {
   const [profiles, setProfiles] = useState<Profile[]>(demo ? demoProfiles : []);
   const [factories, setFactories] = useState<FactoryRecord[]>(
     demo ? demoFactories : [],
+  );
+  const [designers, setDesigners] = useState<DesignerRecord[]>(
+    demo ? demoDesigners : [],
   );
   const [items, setItems] = useState<Item[]>([]);
   const [customers, setCustomers] = useState<Customer[]>(
@@ -360,6 +372,7 @@ export default function Portal() {
       { data: j, error: je },
       { data: p, error: pe },
       { data: f, error: fe },
+      { data: ds, error: dse },
       { data: d, error: de },
       { data: x, error: xe },
       { data: y, error: ye },
@@ -379,6 +392,7 @@ export default function Portal() {
         .eq("active", true)
         .order("full_name"),
       sb.from("factories").select("id,name,active").order("name"),
+      sb.from("designers").select("id,name,active").order("name"),
       sb
         .from("financial_documents")
         .select("*,items:financial_document_items(*)")
@@ -408,6 +422,7 @@ export default function Portal() {
     if (je) throw je;
     if (pe) throw pe;
     if (fe) throw fe;
+    if (dse) throw dse;
     if (de) throw de;
     if (xe) throw xe;
     if (ye) throw ye;
@@ -417,6 +432,7 @@ export default function Portal() {
     setJobs((j || []) as unknown as Job[]);
     setProfiles((p || []) as Profile[]);
     setFactories((f || []) as FactoryRecord[]);
+    setDesigners((ds || []) as DesignerRecord[]);
     setDocuments((d || []) as unknown as FinancialDocument[]);
     setExpenses((x || []) as unknown as Expense[]);
     setPayments((y || []) as unknown as Payment[]);
@@ -731,6 +747,7 @@ export default function Portal() {
   ] as const;
   const adminNav = [
     { id: "users", label: "Users", Icon: Users },
+    { id: "designers", label: "Designers", Icon: Pencil },
     { id: "factories", label: "Factories", Icon: Settings },
   ] as const;
   const nav = [
@@ -763,6 +780,10 @@ export default function Portal() {
       "Record operational and job-related expenses.",
     ],
     users: ["User management", "Invite staff and control portal access."],
+    designers: [
+      "Manage designers",
+      "Create and manage designers available for job assignment.",
+    ],
     factories: [
       "Manage factories",
       "Add, rename, activate or deactivate production partners.",
@@ -942,6 +963,15 @@ export default function Portal() {
             show={show}
           />
         )}
+        {view === "designers" && profile.role === "super_admin" && (
+          <DesignerAdmin
+            designers={designers}
+            demo={demo}
+            setDesigners={setDesigners}
+            reload={loadData}
+            show={show}
+          />
+        )}
         {view === "factories" && profile.role === "super_admin" && (
           <FactoryAdmin
             factories={factories}
@@ -974,6 +1004,7 @@ export default function Portal() {
           currentUserId={profile.id}
           profiles={profiles}
           factories={factories}
+          designers={designers}
           items={items}
           customers={customers}
           canFinance={canFinance}
@@ -1835,6 +1866,7 @@ function JobDrawer({
   currentUserId,
   profiles,
   factories,
+  designers,
   items,
   customers,
   canFinance,
@@ -1849,6 +1881,7 @@ function JobDrawer({
   currentUserId: string;
   profiles: Profile[];
   factories: FactoryRecord[];
+  designers: DesignerRecord[];
   items: Item[];
   customers: Customer[];
   canFinance: boolean;
@@ -1932,6 +1965,7 @@ function JobDrawer({
   const available = factories.filter(
     (f) => f.active || f.id === form.factory_id,
   );
+  const availableDesigners = designers.filter((designer) => designer.active);
   const visibleProductionItems = productionItems.length
     ? productionItems.map((line) => ({
         quantity: line.quantity,
@@ -2119,10 +2153,22 @@ function JobDrawer({
               </select>
             </Field>
             <Field label="Designer">
-              <input
+              <select
                 value={form.designer_name || ""}
-                onChange={(e) => set("designer_name", e.target.value)}
-              />
+                onChange={(e) => set("designer_name", e.target.value || null)}
+              >
+                <option value="">Not assigned</option>
+                {availableDesigners.map((designer) => (
+                  <option key={designer.id} value={designer.name}>
+                    {designer.name}
+                  </option>
+                ))}
+              </select>
+              {!availableDesigners.length && (
+                <small className="helper">
+                  No available designers. Create a designer under Administration → Designers first.
+                </small>
+              )}
             </Field>
             <Field label="Factory">
               <select
@@ -4805,6 +4851,210 @@ function Items({
             </button>
           </form>
         </div>
+      )}
+    </>
+  );
+}
+
+
+function DesignerAdmin({
+  designers,
+  demo,
+  setDesigners,
+  reload,
+  show,
+}: {
+  designers: DesignerRecord[];
+  demo: boolean;
+  setDesigners: (designers: DesignerRecord[]) => void;
+  reload: () => Promise<void>;
+  show: (k: "success" | "error", t: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  const createDesigner = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const value = name.trim();
+    if (!value) return;
+
+    if (
+      designers.some(
+        (designer) =>
+          designer.name.trim().toLocaleLowerCase() ===
+          value.toLocaleLowerCase(),
+      )
+    ) {
+      show("error", "This designer already exists");
+      return;
+    }
+
+    setCreating(true);
+    try {
+      if (demo) {
+        setDesigners(
+          [...designers, { id: crypto.randomUUID(), name: value, active: true }]
+            .sort((a, b) => a.name.localeCompare(b.name)),
+        );
+        setName("");
+        show("success", "Designer added");
+        return;
+      }
+
+      const { error } = await createClient()
+        .from("designers")
+        .insert({ name: value, active: true });
+      if (error) throw error;
+
+      setName("");
+      await reload();
+      show("success", "Designer added");
+    } catch (error) {
+      show(
+        "error",
+        error instanceof Error ? error.message : "Unable to create designer",
+      );
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const renameDesigner = async (designer: DesignerRecord) => {
+    const value = prompt("Designer name", designer.name)?.trim();
+    if (!value || value === designer.name) return;
+
+    if (
+      designers.some(
+        (item) =>
+          item.id !== designer.id &&
+          item.name.trim().toLocaleLowerCase() === value.toLocaleLowerCase(),
+      )
+    ) {
+      show("error", "This designer already exists");
+      return;
+    }
+
+    try {
+      if (demo) {
+        setDesigners(
+          designers
+            .map((item) =>
+              item.id === designer.id ? { ...item, name: value } : item,
+            )
+            .sort((a, b) => a.name.localeCompare(b.name)),
+        );
+        show("success", "Designer renamed");
+        return;
+      }
+
+      const { error } = await createClient()
+        .from("designers")
+        .update({ name: value })
+        .eq("id", designer.id);
+      if (error) throw error;
+
+      await reload();
+      show("success", "Designer renamed");
+    } catch (error) {
+      show(
+        "error",
+        error instanceof Error ? error.message : "Unable to rename designer",
+      );
+    }
+  };
+
+  const toggleDesigner = async (designer: DesignerRecord) => {
+    try {
+      if (demo) {
+        setDesigners(
+          designers.map((item) =>
+            item.id === designer.id
+              ? { ...item, active: !item.active }
+              : item,
+          ),
+        );
+        show(
+          "success",
+          designer.active ? "Designer made unavailable" : "Designer made available",
+        );
+        return;
+      }
+
+      const { error } = await createClient()
+        .from("designers")
+        .update({ active: !designer.active })
+        .eq("id", designer.id);
+      if (error) throw error;
+
+      await reload();
+      show(
+        "success",
+        designer.active ? "Designer made unavailable" : "Designer made available",
+      );
+    } catch (error) {
+      show(
+        "error",
+        error instanceof Error ? error.message : "Unable to update designer",
+      );
+    }
+  };
+
+  return (
+    <>
+      <section className="sectionHead">
+        <h2>Designers</h2>
+      </section>
+
+      <form className="factoryAdd" onSubmit={createDesigner}>
+        <input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          required
+          maxLength={120}
+          placeholder="New designer name"
+        />
+        <button className="primary" type="submit" disabled={creating}>
+          <Plus /> {creating ? "Creating…" : "Add designer"}
+        </button>
+      </form>
+
+      <div className="factoryGrid">
+        {designers.map((designer) => (
+          <article
+            className={`factoryCard ${designer.active ? "" : "inactive"}`}
+            key={designer.id}
+          >
+            <span className="brandMark">
+              <Pencil />
+            </span>
+            <div>
+              <strong>{designer.name}</strong>
+              <small>
+                {designer.active
+                  ? "Available for job assignment"
+                  : "Unavailable · hidden from job dropdown"}
+              </small>
+            </div>
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => void renameDesigner(designer)}
+            >
+              Rename
+            </button>
+            <button
+              className={designer.active ? "danger" : "primary"}
+              type="button"
+              onClick={() => void toggleDesigner(designer)}
+            >
+              {designer.active ? "Make unavailable" : "Make available"}
+            </button>
+          </article>
+        ))}
+      </div>
+
+      {!designers.length && (
+        <div className="empty">No designers created yet.</div>
       )}
     </>
   );
