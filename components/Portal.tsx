@@ -288,6 +288,7 @@ type View =
   | "quotations"
   | "invoices"
   | "expenses"
+  | "reports"
   | "users"
   | "designers"
   | "factories";
@@ -745,6 +746,9 @@ export default function Portal() {
     { id: "invoices", label: "Invoices", Icon: Receipt },
     { id: "expenses", label: "Expenses", Icon: Receipt },
   ] as const;
+  const reportsNav = [
+    { id: "reports", label: "Reports", Icon: BarChart3 },
+  ] as const;
   const adminNav = [
     { id: "users", label: "Users", Icon: Users },
     { id: "designers", label: "Designers", Icon: Pencil },
@@ -753,6 +757,7 @@ export default function Portal() {
   const nav = [
     ...operationsNav,
     ...financeNav,
+    ...reportsNav,
     ...(["super_admin", "admin"].includes(profile.role) ? adminNav : []),
   ];
   const pageMeta: Record<View, [string, string]> = {
@@ -778,6 +783,10 @@ export default function Portal() {
     expenses: [
       "Expense records",
       "Record operational and job-related expenses.",
+    ],
+    reports: [
+      "Reports",
+      "Build custom reports and export selected fields to Excel or PDF.",
     ],
     users: ["User management", "Invite staff and control portal access."],
     designers: [
@@ -805,6 +814,7 @@ export default function Portal() {
         <nav>
           <NavGroup label="Operations" items={operationsNav} view={view} select={setView} close={() => setMenu(false)} />
           <NavGroup label="Finance" items={financeNav} view={view} select={setView} close={() => setMenu(false)} />
+          <NavGroup label="Reports" items={reportsNav} view={view} select={setView} close={() => setMenu(false)} />
           {["super_admin", "admin"].includes(profile.role) && <NavGroup label="Administration" items={adminNav} view={view} select={setView} close={() => setMenu(false)} />}
         </nav>
         <div className="account">
@@ -848,6 +858,7 @@ export default function Portal() {
                   "expenses",
                   "items",
                   "customers",
+                  "reports",
                 ] as View[]
               ).includes(view) && (
                 <button className="primary" onClick={() => setEditing(null)}>
@@ -944,6 +955,15 @@ export default function Portal() {
             reload={loadData}
             show={show}
             onCreateCustomer={createCustomer}
+          />
+        )}
+        {view === "reports" && (
+          <Reports
+            jobs={jobs}
+            customers={customers}
+            documents={documents}
+            payments={payments}
+            expenses={expenses}
           />
         )}
         {view === "expenses" && (
@@ -4118,6 +4138,63 @@ function DocumentEditor({
       </form>
     </div>
   );
+}
+
+function Reports({
+  jobs,
+  customers,
+  documents,
+  payments,
+  expenses,
+}: {
+  jobs: Job[];
+  customers: Customer[];
+  documents: FinancialDocument[];
+  payments: Payment[];
+  expenses: Expense[];
+}) {
+  type ReportType = "jobs" | "customers" | "invoices" | "quotations" | "payments" | "expenses";
+  type ReportField = { key: string; label: string; value: (row: any) => string | number };
+  const [reportType, setReportType] = useState<ReportType>("jobs");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
+
+  const configs: Record<ReportType, { label: string; rows: any[]; date: (row: any) => string; fields: ReportField[] }> = {
+    jobs: { label: "Jobs", rows: jobs, date: r => r.created_at, fields: [
+      {key:"job_number",label:"Job number",value:r=>r.job_number},{key:"customer_name",label:"Customer",value:r=>r.customer_name},{key:"customer_phone",label:"Phone",value:r=>r.customer_phone||""},{key:"customer_email",label:"Email",value:r=>r.customer_email||""},{key:"contact_person",label:"Contact person",value:r=>r.contact_person||""},{key:"description",label:"Description",value:r=>r.description},{key:"status",label:"Status",value:r=>labels[r.status]||r.status},{key:"owner",label:"Owner",value:r=>r.owner?.full_name||""},{key:"assigned",label:"Assigned administrator",value:r=>r.assignee?.full_name||""},{key:"designer",label:"Designer",value:r=>r.designer_name||""},{key:"factory",label:"Factory",value:r=>r.factory?.name||""},{key:"next_task",label:"Next task",value:r=>r.next_task||""},{key:"quotation",label:"Quotation number",value:r=>r.quotation_number||""},{key:"invoice",label:"Invoice number",value:r=>r.invoice_number||""},{key:"invoice_total",label:"Invoice total",value:r=>Number(r.invoice_total||0)},{key:"amount_paid",label:"Amount paid",value:r=>Number(r.amount_paid||0)},{key:"payment_status",label:"Payment status",value:r=>labels[r.payment_status]||r.payment_status},{key:"due_date",label:"Due date",value:r=>r.due_date||""},{key:"notes",label:"Notes",value:r=>r.notes||""},{key:"created_at",label:"Created date",value:r=>r.created_at?.slice(0,10)||""},{key:"updated_at",label:"Updated date",value:r=>r.updated_at?.slice(0,10)||""}
+    ]},
+    customers: { label:"Customers", rows:customers, date:r=>r.created_at, fields:[
+      {key:"name",label:"Customer name",value:r=>r.name},{key:"phone",label:"Phone",value:r=>r.phone||""},{key:"email",label:"Email",value:r=>r.email||""},{key:"contact_person",label:"Contact person",value:r=>r.contact_person||""},{key:"created_at",label:"Created date",value:r=>r.created_at?.slice(0,10)||""}
+    ]},
+    invoices: { label:"Invoices", rows:documents.filter(d=>d.document_type==="invoice"), date:r=>r.issue_date, fields:[
+      {key:"number",label:"Invoice number",value:r=>r.document_number},{key:"status",label:"Status",value:r=>r.voided_at?"Voided":r.status},{key:"customer",label:"Customer",value:r=>r.customer_name},{key:"subject",label:"Subject",value:r=>r.subject||""},{key:"issue_date",label:"Invoice date",value:r=>r.issue_date},{key:"due_date",label:"Due date",value:r=>r.due_date||""},{key:"terms",label:"Terms",value:r=>r.terms},{key:"subtotal",label:"Subtotal",value:r=>r.items.reduce((a:any,i:any)=>a+Number(i.quantity)*Number(i.rate),0)},{key:"discount",label:"Discount %",value:r=>Number(r.discount_percent||0)},{key:"total",label:"Total",value:r=>documentTotal(r)},{key:"advance",label:"Advance payment",value:r=>Number(r.advance_payment||0)},{key:"paid",label:"Other payments",value:r=>Number(r.amount_paid||0)},{key:"balance",label:"Balance",value:r=>documentBalance(r)},{key:"notes",label:"Notes",value:r=>r.notes||""},{key:"created",label:"Created date",value:r=>r.created_at?.slice(0,10)||""}
+    ]},
+    quotations: { label:"Quotations", rows:documents.filter(d=>d.document_type==="quotation"), date:r=>r.issue_date, fields:[
+      {key:"number",label:"Quotation number",value:r=>r.document_number},{key:"status",label:"Status",value:r=>r.status},{key:"customer",label:"Customer",value:r=>r.customer_name},{key:"subject",label:"Subject",value:r=>r.subject||""},{key:"issue_date",label:"Quote date",value:r=>r.issue_date},{key:"due_date",label:"Due date",value:r=>r.due_date||""},{key:"terms",label:"Terms",value:r=>r.terms},{key:"subtotal",label:"Subtotal",value:r=>r.items.reduce((a:any,i:any)=>a+Number(i.quantity)*Number(i.rate),0)},{key:"discount",label:"Discount %",value:r=>Number(r.discount_percent||0)},{key:"total",label:"Total",value:r=>documentTotal(r)},{key:"notes",label:"Notes",value:r=>r.notes||""},{key:"created",label:"Created date",value:r=>r.created_at?.slice(0,10)||""}
+    ]},
+    payments: { label:"Payments", rows:payments, date:r=>r.payment_date, fields:[
+      {key:"invoice",label:"Invoice number",value:r=>r.invoice?.document_number||""},{key:"customer",label:"Customer",value:r=>r.invoice?.customer_name||""},{key:"date",label:"Payment date",value:r=>r.payment_date},{key:"amount",label:"Amount",value:r=>Number(r.amount||0)},{key:"method",label:"Payment method",value:r=>r.payment_method||""},{key:"reference",label:"Reference",value:r=>r.reference||""},{key:"notes",label:"Notes",value:r=>r.notes||""},{key:"created",label:"Created date",value:r=>r.created_at?.slice(0,10)||""}
+    ]},
+    expenses: { label:"Expenses", rows:expenses, date:r=>r.expense_date, fields:[
+      {key:"number",label:"Expense number",value:r=>r.expense_number},{key:"date",label:"Expense date",value:r=>r.expense_date},{key:"category",label:"Category",value:r=>r.category},{key:"vendor",label:"Vendor",value:r=>r.vendor||""},{key:"description",label:"Description",value:r=>r.description},{key:"job",label:"Job number",value:r=>r.job?.job_number||""},{key:"amount",label:"Amount",value:r=>Number(r.amount||0)},{key:"method",label:"Payment method",value:r=>r.payment_method||""},{key:"reference",label:"Reference",value:r=>r.reference||""},{key:"notes",label:"Notes",value:r=>r.notes||""},{key:"created",label:"Created date",value:r=>r.created_at?.slice(0,10)||""}
+    ]}
+  };
+  const config=configs[reportType];
+  useEffect(()=>{ setSelected(config.fields.map(f=>f.key)); },[reportType]);
+  const fields=config.fields.filter(f=>selected.includes(f.key));
+  const rows=config.rows.filter(row=>{ const d=(config.date(row)||"").slice(0,10); return (!fromDate||d>=fromDate)&&(!toDate||d<=toDate); });
+  const csvEscape=(v:unknown)=>`"${String(v??"").replaceAll('"','""')}"`;
+  const exportExcel=()=>{ if(!fields.length)return; const csv=[fields.map(f=>csvEscape(f.label)).join(","),...rows.map(r=>fields.map(f=>csvEscape(f.value(r))).join(","))].join("\n"); const blob=new Blob(["\ufeff"+csv],{type:"application/vnd.ms-excel;charset=utf-8"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url;a.download=`MN-${reportType}-report.xls`;a.click();URL.revokeObjectURL(url); };
+  const exportPdf=()=>{ if(!fields.length)return; const w=window.open("","_blank"); if(!w)return; const th=fields.map(f=>`<th>${escapeHtml(f.label)}</th>`).join(""); const body=rows.map(r=>`<tr>${fields.map(f=>`<td>${escapeHtml(f.value(r))}</td>`).join("")}</tr>`).join(""); w.document.write(`<!doctype html><html><head><title>${escapeHtml(config.label)} Report</title><style>@page{size:A4 landscape;margin:10mm}body{font:11px Arial;color:#222}h1{font-size:20px}p{color:#666}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:5px;text-align:left;vertical-align:top}th{background:#eee}</style></head><body><h1>MN Maldives · ${escapeHtml(config.label)} Report</h1><p>${fromDate||"All dates"}${toDate?` to ${toDate}`:""} · ${rows.length} records</p><table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table><script>window.onload=()=>window.print()<\/script></body></html>`); w.document.close(); };
+  return <>
+    <section className="sectionHead"><h2>Report builder</h2><div className="docActions"><button className="secondary" type="button" disabled={!fields.length} onClick={exportExcel}><Download/> Export Excel</button><button className="primary" type="button" disabled={!fields.length} onClick={exportPdf}><Printer/> Export PDF</button></div></section>
+    <div className="formSection"><div className="formGrid"><Field label="Report type"><select value={reportType} onChange={e=>setReportType(e.target.value as ReportType)}>{Object.entries(configs).map(([key,c])=><option key={key} value={key}>{c.label}</option>)}</select></Field><Field label="From date"><input type="date" value={fromDate} onChange={e=>setFromDate(e.target.value)}/></Field><Field label="To date"><input type="date" value={toDate} onChange={e=>setToDate(e.target.value)}/></Field></div></div>
+    <section className="sectionHead"><h2>Select fields</h2><div className="docActions"><button type="button" className="secondary compact" onClick={()=>setSelected(config.fields.map(f=>f.key))}>Select all</button><button type="button" className="secondary compact" onClick={()=>setSelected([])}>Clear all</button></div></section>
+    <div className="factoryGrid">{config.fields.map(field=><label className="factoryCard" key={field.key} style={{cursor:"pointer"}}><input type="checkbox" checked={selected.includes(field.key)} onChange={e=>setSelected(current=>e.target.checked?[...current,field.key]:current.filter(k=>k!==field.key))}/><div><strong>{field.label}</strong><small>Include in report</small></div></label>)}</div>
+    <section className="sectionHead"><h2>Preview</h2><span className="helper">{rows.length} records · {fields.length} fields selected</span></section>
+    <div className="tableWrap responsiveTable"><table><thead><tr>{fields.map(f=><th key={f.key}>{f.label}</th>)}</tr></thead><tbody>{rows.map((row,index)=><tr key={row.id||index}>{fields.map(f=><td key={f.key} data-label={f.label}>{String(f.value(row)??"")}</td>)}</tr>)}</tbody></table>{!fields.length&&<div className="empty">Select at least one field for the report.</div>}{fields.length>0&&!rows.length&&<div className="empty">No records match the selected date range.</div>}</div>
+  </>;
 }
 
 function Expenses({
