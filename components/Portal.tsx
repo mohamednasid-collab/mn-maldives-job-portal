@@ -314,6 +314,8 @@ export default function Portal() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [editing, setEditing] = useState<Job | null | undefined>(undefined);
+  const [requestedProductionJobId, setRequestedProductionJobId] =
+    useState<string | null>(null);
   const [viewingDocument, setViewingDocument] =
     useState<FinancialDocument | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
@@ -665,6 +667,19 @@ export default function Portal() {
   }
   async function updateJobStatus(job: Job, nextStatus: JobStatus) {
     if (nextStatus === job.status) return;
+
+    // Keep the original Production rule:
+    // if there is no invoice number, open the existing production-item flow first.
+    if (
+      nextStatus === "production" &&
+      job.status !== "production" &&
+      !job.invoice_number?.trim()
+    ) {
+      setRequestedProductionJobId(job.id);
+      setEditing(job);
+      return;
+    }
+
     try {
       if (demo) {
         setJobs((current) =>
@@ -963,8 +978,17 @@ export default function Portal() {
           customers={customers}
           canFinance={canFinance}
           canDelete={canDelete}
-          onClose={() => setEditing(undefined)}
-          onSave={saveJob}
+          requestProduction={Boolean(
+            editing && requestedProductionJobId === editing.id,
+          )}
+          onClose={() => {
+            setRequestedProductionJobId(null);
+            setEditing(undefined);
+          }}
+          onSave={async (input) => {
+            await saveJob(input);
+            setRequestedProductionJobId(null);
+          }}
           onCreateCustomer={createCustomer}
           onDelete={removeJob}
         />
@@ -1815,6 +1839,7 @@ function JobDrawer({
   customers,
   canFinance,
   canDelete,
+  requestProduction,
   onClose,
   onSave,
   onCreateCustomer,
@@ -1828,6 +1853,7 @@ function JobDrawer({
   customers: Customer[];
   canFinance: boolean;
   canDelete: boolean;
+  requestProduction?: boolean;
   onClose: () => void;
   onSave: (j: JobSaveInput) => Promise<void>;
   onCreateCustomer: (customer: {
@@ -1877,6 +1903,20 @@ function JobDrawer({
     job?.cancellation_reason || "",
   );
   const [cancellationError, setCancellationError] = useState("");
+
+  useEffect(() => {
+    if (
+      requestProduction &&
+      job &&
+      job.status !== "production" &&
+      !job.invoice_number?.trim()
+    ) {
+      setProductionRows([{ selection: "", quantity: 1 }]);
+      setProductionError("");
+      setProductionOpen(true);
+    }
+  }, [requestProduction, job]);
+
   const set = (k: keyof Job, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
   const selectCustomer = (customer: Customer) => {
     setForm((current) => ({
@@ -4939,4 +4979,3 @@ function exportCsv(jobs: Job[]) {
   a.click();
   URL.revokeObjectURL(url);
 }
-
