@@ -4,6 +4,7 @@ export type AppRole = "super_admin" | "admin" | "finance" | "staff";
 
 export interface Profile { id: string; full_name: string; email: string; role: AppRole; active: boolean; }
 export interface FactoryRecord { id: string; name: string; active: boolean; }
+export interface DesignerRecord { id: string; name: string; active: boolean; }
 export interface Item { id: string; code: string; name: string; rate: number; description: string | null; created_at: string; }
 export interface Customer { id: string; name: string; phone: string | null; email: string | null; contact_person: string | null; created_at: string; }
 export interface JobProductionItem { quantity: number; item: Pick<Item, "id" | "code" | "name" | "rate" | "description"> | null; }
