@@ -753,7 +753,7 @@ export default function Portal() {
   const nav = [
     ...operationsNav,
     ...financeNav,
-    ...(profile.role === "super_admin" ? adminNav : []),
+    ...(["super_admin", "admin"].includes(profile.role) ? adminNav : []),
   ];
   const pageMeta: Record<View, [string, string]> = {
     dashboard: [
@@ -805,7 +805,7 @@ export default function Portal() {
         <nav>
           <NavGroup label="Operations" items={operationsNav} view={view} select={setView} close={() => setMenu(false)} />
           <NavGroup label="Finance" items={financeNav} view={view} select={setView} close={() => setMenu(false)} />
-          {profile.role === "super_admin" && <NavGroup label="Administration" items={adminNav} view={view} select={setView} close={() => setMenu(false)} />}
+          {["super_admin", "admin"].includes(profile.role) && <NavGroup label="Administration" items={adminNav} view={view} select={setView} close={() => setMenu(false)} />}
         </nav>
         <div className="account">
           <span className="avatar">{initials(profile.full_name)}</span>
@@ -955,7 +955,7 @@ export default function Portal() {
             show={show}
           />
         )}
-        {view === "users" && profile.role === "super_admin" && (
+        {view === "users" && ["super_admin", "admin"].includes(profile.role) && (
           <UserAdmin
             profiles={profiles}
             demo={demo}
@@ -963,7 +963,7 @@ export default function Portal() {
             show={show}
           />
         )}
-        {view === "designers" && profile.role === "super_admin" && (
+        {view === "designers" && ["super_admin", "admin"].includes(profile.role) && (
           <DesignerAdmin
             designers={designers}
             demo={demo}
@@ -972,7 +972,7 @@ export default function Portal() {
             show={show}
           />
         )}
-        {view === "factories" && profile.role === "super_admin" && (
+        {view === "factories" && ["super_admin", "admin"].includes(profile.role) && (
           <FactoryAdmin
             factories={factories}
             demo={demo}
