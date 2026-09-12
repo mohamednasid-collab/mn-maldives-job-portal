@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./ipad.css";
 
 export const metadata: Metadata = {
   title: "MN Maldives | Job Portal",
