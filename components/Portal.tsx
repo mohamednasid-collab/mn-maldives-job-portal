@@ -3997,27 +3997,6 @@ function DocumentEditor({
             <Field label="Terms">
               <input name="terms" defaultValue={document.terms} />
             </Field>
-            <Field label="Discount %">
-              <input
-                name="discount_percent"
-                type="number"
-                min="0"
-                max="100"
-                step=".01"
-                defaultValue={document.discount_percent}
-              />
-            </Field>
-            {document.document_type === "invoice" && (
-              <Field label="Advance payment (MVR)">
-                <input
-                  name="advance_payment"
-                  type="number"
-                  min="0"
-                  step=".01"
-                  defaultValue={document.advance_payment || 0}
-                />
-              </Field>
-            )}
           </div>
         </FormSection>
         <FormSection title="Items">
@@ -4119,6 +4098,29 @@ function DocumentEditor({
           >
             <Plus /> Add item
           </button>
+          <div className="formGrid" style={{ marginTop: 18 }}>
+            <Field label="Discount %">
+              <input
+                name="discount_percent"
+                type="number"
+                min="0"
+                max="100"
+                step=".01"
+                defaultValue={document.discount_percent}
+              />
+            </Field>
+            {document.document_type === "invoice" && (
+              <Field label="Advance payment (MVR)">
+                <input
+                  name="advance_payment"
+                  type="number"
+                  min="0"
+                  step=".01"
+                  defaultValue={document.advance_payment || 0}
+                />
+              </Field>
+            )}
+          </div>
           <div className="documentTotal">
             Subtotal <strong>{money(subtotal)}</strong>
           </div>
