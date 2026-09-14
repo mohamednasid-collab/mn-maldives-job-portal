@@ -1047,6 +1047,8 @@ export default function Portal() {
       {viewingDocument && (
         <DocumentViewer
           document={viewingDocument}
+          jobs={jobs}
+          customers={customers}
           onClose={() => setViewingDocument(null)}
         />
       )}
@@ -3130,7 +3132,7 @@ function Documents({
           <thead>
             <tr>
               <th>Number</th>
-              <th>Type</th>
+              {mode === "quotation" && <th>Type</th>}
               <th>Status</th>
               <th>Customer</th>
               <th>Date</th>
@@ -3164,9 +3166,11 @@ function Documents({
                       {d.document_number}
                     </button>
                   </td>
-                  <td data-label="Type">
-                    <StatusPill value={d.document_type} />
-                  </td>
+                  {mode === "quotation" && (
+                    <td data-label="Type">
+                      <StatusPill value={d.document_type} />
+                    </td>
+                  )}
                   <td data-label="Status">
                     {d.voided_at ? (
                       <StatusPill value="voided" />
@@ -3324,6 +3328,8 @@ function Documents({
       {viewingDoc && (
         <DocumentViewer
           document={viewingDoc}
+          jobs={jobs}
+          customers={customers}
           onClose={() => setViewingDoc(null)}
         />
       )}
@@ -3456,27 +3462,7 @@ function Documents({
                     }
                   />
                 </Field>
-                <Field label="Discount %">
-                  <input
-                    name="discount_percent"
-                    type="number"
-                    min="0"
-                    max="100"
-                    step=".01"
-                    defaultValue="0"
-                  />
-                </Field>
-                {kind === "invoice" && (
-                  <Field label="Advance payment (MVR)">
-                    <input
-                      name="advance_payment"
-                      type="number"
-                      min="0"
-                      step=".01"
-                      defaultValue="0"
-                    />
-                  </Field>
-                )}
+
               </div>
             </FormSection>
             <FormSection title="Items">
@@ -3582,6 +3568,29 @@ function Documents({
               >
                 <Plus /> Add item
               </button>
+              <div className="formGrid documentAdjustments">
+                <Field label="Discount %">
+                  <input
+                    name="discount_percent"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step=".01"
+                    defaultValue="0"
+                  />
+                </Field>
+                {kind === "invoice" && (
+                  <Field label="Advance payment (MVR)">
+                    <input
+                      name="advance_payment"
+                      type="number"
+                      min="0"
+                      step=".01"
+                      defaultValue="0"
+                    />
+                  </Field>
+                )}
+              </div>
               <div className="documentTotal">
                 Subtotal <strong>{money(subtotal)}</strong>
               </div>
@@ -3683,13 +3692,33 @@ function Documents({
 
 function DocumentViewer({
   document,
+  jobs,
+  customers,
   onClose,
 }: {
   document: FinancialDocument;
+  jobs: Job[];
+  customers: Customer[];
   onClose: () => void;
 }) {
   const total = documentTotal(document);
   const balance = documentBalance(document);
+  const normalizeName = (value: string) =>
+    value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+  const relatedJob = document.job_id
+    ? jobs.find((job) => job.id === document.job_id)
+    : undefined;
+  const relatedCustomer =
+    customers.find((customer) =>
+      relatedJob?.customer_id
+        ? customer.id === relatedJob.customer_id
+        : normalizeName(customer.name) === normalizeName(document.customer_name),
+    ) ||
+    customers.find(
+      (customer) =>
+        normalizeName(customer.name) === normalizeName(document.customer_name),
+    );
+  const contactNumber = relatedJob?.customer_phone || relatedCustomer?.phone || "—";
   return (
     <div
       className="modal"
@@ -3711,6 +3740,8 @@ function DocumentViewer({
           <div className="documentViewGrid">
             <span>Customer</span>
             <strong>{document.customer_name}</strong>
+            <span>Contact number</span>
+            <strong>{contactNumber}</strong>
             <span>Subject</span>
             <strong>{document.subject || "—"}</strong>
             <span>Issue date</span>
@@ -3997,6 +4028,7 @@ function DocumentEditor({
             <Field label="Terms">
               <input name="terms" defaultValue={document.terms} />
             </Field>
+
           </div>
         </FormSection>
         <FormSection title="Items">
@@ -4098,7 +4130,7 @@ function DocumentEditor({
           >
             <Plus /> Add item
           </button>
-          <div className="formGrid" style={{ marginTop: 18 }}>
+          <div className="formGrid documentAdjustments">
             <Field label="Discount %">
               <input
                 name="discount_percent"
