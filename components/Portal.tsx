@@ -281,6 +281,7 @@ const initials = (n: string) =>
 
 type View =
   | "dashboard"
+  | "jobs"
   | "board"
   | "tasks"
   | "items"
@@ -307,6 +308,7 @@ export default function Portal() {
     demo ? demoProfiles[0] : null,
   );
   const [loading, setLoading] = useState(!demo);
+  const [dataReady, setDataReady] = useState(demo);
   const [jobs, setJobs] = useState<Job[]>(demo ? demoJobs : []);
   const [profiles, setProfiles] = useState<Profile[]>(demo ? demoProfiles : []);
   const [factories, setFactories] = useState<FactoryRecord[]>(
@@ -368,6 +370,7 @@ export default function Portal() {
   }
   async function loadData() {
     if (demo) return;
+    setDataReady(false);
     const sb = createClient();
     const [
       { data: j, error: je },
@@ -381,12 +384,12 @@ export default function Portal() {
       { data: i, error: ie },
       { data: c, error: ce },
     ] = await Promise.all([
-      sb
+      readAllRows((from, to) => sb
         .from("jobs")
         .select(
           "*,owner:profiles!jobs_owner_id_fkey(full_name),assignee:profiles!jobs_assigned_admin_id_fkey(full_name),factory:factories(name),production_items:job_items(quantity,item:items(id,code,name,rate,description))",
         )
-        .order("created_at", { ascending: false }),
+        .order("created_at", { ascending: false }).order("id").range(from, to)),
       sb
         .from("profiles")
         .select("id,full_name,email,role,active")
@@ -394,20 +397,20 @@ export default function Portal() {
         .order("full_name"),
       sb.from("factories").select("id,name,active").order("name"),
       sb.from("designers").select("id,name,active").order("name"),
-      sb
+      readAllRows((from, to) => sb
         .from("financial_documents")
         .select("*,items:financial_document_items(*)")
-        .order("created_at", { ascending: false }),
-      sb
+        .order("created_at", { ascending: false }).order("id").range(from, to)),
+      readAllRows((from, to) => sb
         .from("expenses")
         .select("*,job:jobs(job_number)")
-        .order("expense_date", { ascending: false }),
-      sb
+        .order("expense_date", { ascending: false }).order("id").range(from, to)),
+      readAllRows((from, to) => sb
         .from("payments")
         .select(
           "*,invoice:financial_documents!payments_invoice_id_fkey(id,document_number,customer_name,job_id,discount_percent,advance_payment,amount_paid,voided_at,items:financial_document_items(*))",
         )
-        .order("payment_date", { ascending: false }),
+        .order("payment_date", { ascending: false }).order("id").range(from, to)),
       sb
         .from("tasks")
         .select(
@@ -440,6 +443,7 @@ export default function Portal() {
     setTasks((t || []) as unknown as Task[]);
     setItems((i || []) as unknown as Item[]);
     setCustomers((c || []) as Customer[]);
+    setDataReady(true);
   }
   function show(
     kind: Notice extends infer _ ? "success" | "error" : "success",
@@ -738,6 +742,7 @@ export default function Portal() {
   if (!profile) return <Login onLogin={login} />;
   const operationsNav = [
     { id: "dashboard", label: "Dashboard", Icon: LayoutDashboard },
+    { id: "jobs", label: "Jobs", Icon: BriefcaseBusiness },
     { id: "items", label: "Items", Icon: Package },
     { id: "customers", label: "Customers", Icon: Users },
   ] as const;
@@ -762,7 +767,11 @@ export default function Portal() {
   ];
   const pageMeta: Record<View, [string, string]> = {
     dashboard: [
-      "Operations overview",
+      "Dashboard",
+      "Job progress, cash flow and outstanding payments.",
+    ],
+    jobs: [
+      "Jobs",
       "Monitor jobs, payments and delivery progress.",
     ],
     board: ["Workflow board", "See every active job at a glance."],
@@ -877,7 +886,11 @@ export default function Portal() {
           </div>
         )}
         {view === "dashboard" && (
-          <Dashboard
+          <ManagementDashboard jobs={jobs} documents={documents} payments={payments}
+            expenses={expenses} ready={dataReady} reload={loadData} />
+        )}
+        {view === "jobs" && (
+          <Jobs
             jobs={jobs}
             documents={documents}
             filtered={filtered}
@@ -1005,7 +1018,7 @@ export default function Portal() {
       <nav className="mobileNav">
         {nav
           .filter(({ id }) =>
-            ["dashboard", "quotations", "invoices", "expenses"].includes(id),
+            ["dashboard", "jobs", "quotations", "invoices", "expenses"].includes(id),
           )
           .map(({ id, label, Icon }) => (
           <button
@@ -1238,7 +1251,194 @@ function Filters({
     </div>
   );
 }
-function Dashboard({
+// Read through server row limits using the signed-in client's existing RLS policies.
+async function readAllRows<T>(
+  page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+): Promise<{ data: T[]; error: null }> {
+  const rows: T[] = [];
+  for (;;) {
+    const { data, error } = await page(rows.length, rows.length + 499);
+    if (error) throw new Error(error.message);
+    if (!data?.length) return { data: rows, error: null };
+    rows.push(...data);
+  }
+}
+
+function dashboardToday() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Indian/Maldives", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  const part = (type: string) => parts.find((p) => p.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function managementSummary(
+  jobs: Job[], documents: FinancialDocument[], payments: Payment[],
+  expenses: Expense[], today: string, year: number,
+) {
+  const invoices = documents.filter((d) => d.document_type === "invoice" && !d.voided_at);
+  // Match the existing Jobs invoice-missing rule, including manually entered numbers.
+  const invoicedJobs = new Set(documents.filter((d) => d.document_type === "invoice").map((d) => d.job_id));
+  const months = Array.from({ length: 12 }, (_, index) => ({
+    key: `${year}-${String(index + 1).padStart(2, "0")}`,
+    label: new Intl.DateTimeFormat("en", { month: "short", timeZone: "UTC" }).format(new Date(Date.UTC(year, index, 1))),
+    income: 0, expenses: 0,
+  }));
+  const add = (date: string, amount: number, kind: "income" | "expenses") => {
+    const month = months.find((m) => m.key === date?.slice(0, 7));
+    if (month && Number.isFinite(amount)) month[kind] += amount;
+  };
+  // Advances are stored separately from payments and have no receipt-date field.
+  invoices.forEach((d) => add(d.issue_date, Number(d.advance_payment || 0), "income"));
+  payments.forEach((p) => add(p.payment_date, Number(p.amount), "income"));
+  expenses.forEach((e) => add(e.expense_date, Number(e.amount), "expenses"));
+  return {
+    statuses: STATUSES.map((status) => ({ status, count: jobs.filter((j) => j.status === status).length })),
+    pending: invoices.reduce((sum, d) => sum + documentBalance(d), 0),
+    overdue: invoices.reduce((sum, d) => sum + (d.due_date && d.due_date < today ? documentBalance(d) : 0), 0),
+    incomplete: jobs.filter((j) => j.status === "incomplete").length,
+    invoiceMissing: jobs.filter((j) => j.status !== "cancelled" && !j.invoice_number?.trim() && !invoicedJobs.has(j.id)).length,
+    pastDue: jobs.filter((j) => j.due_date && j.due_date < today && j.status !== "completed").length,
+    months,
+  };
+}
+
+function ManagementDashboard({
+  jobs, documents, payments, expenses, ready, reload,
+}: {
+  jobs: Job[]; documents: FinancialDocument[]; payments: Payment[];
+  expenses: Expense[]; ready: boolean; reload: () => Promise<void>;
+}) {
+  const [today, setToday] = useState(dashboardToday);
+  const [year, setYear] = useState(() => Number(dashboardToday().slice(0, 4)));
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+  const chartId = useId();
+  useEffect(() => {
+    const timer = window.setInterval(() => setToday(dashboardToday()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const summary = useMemo(() => managementSummary(jobs, documents, payments, expenses, today, year),
+    [jobs, documents, payments, expenses, today, year]);
+  const years = Array.from(new Set([
+    Number(today.slice(0, 4)), year,
+    ...documents.filter((d) => d.document_type === "invoice" && !d.voided_at).map((d) => Number(d.issue_date.slice(0, 4))),
+    ...payments.map((p) => Number(p.payment_date.slice(0, 4))),
+    ...expenses.map((e) => Number(e.expense_date.slice(0, 4))),
+  ])).filter((y) => Number.isInteger(y) && y > 0).sort((a, b) => b - a);
+  const colors = ["#63829d", "#7670b2", "#bc831b", "#3185ad", "#329c93", "#c06445", "#bb4e64", "#7d8790", "#258163"];
+  const maxCount = Math.max(1, ...summary.statuses.map((s) => s.count));
+  const peak = Math.max(1, ...summary.months.flatMap((m) => [m.income, m.expenses]));
+  const income = summary.months.reduce((sum, m) => sum + m.income, 0);
+  const spent = summary.months.reduce((sum, m) => sum + m.expenses, 0);
+  async function refresh() {
+    setRefreshing(true);
+    setError("");
+    try { await reload(); setToday(dashboardToday()); }
+    catch (e) { setError(e instanceof Error ? e.message : "Unable to refresh dashboard."); }
+    finally { setRefreshing(false); }
+  }
+  return (
+    <div className="managementDashboard">
+      <style>{`
+        .managementDashboard { display:grid; gap:18px; min-width:0 }
+        .managementDashboard .overviewHead { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px }
+        .managementDashboard h2 { font-size:18px; margin:0 }
+        .managementDashboard p { color:var(--muted); font-size:12px; line-height:1.6; margin:7px 0 }
+        .managementDashboard .overviewCards { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr)); gap:14px }
+        .managementDashboard .overviewCard,.managementDashboard .overviewPanel { background:#fff; border:1px solid var(--line); border-radius:16px; padding:20px; min-width:0 }
+        .managementDashboard .overviewCard strong { display:block; font-size:clamp(20px,2vw,28px); overflow-wrap:anywhere; margin:10px 0; letter-spacing:-.03em }
+        .managementDashboard .overviewCard h2 { font-size:12px; color:var(--muted) }
+        .managementDashboard .statusRows { list-style:none; padding:0; margin:20px 0 0; display:grid; gap:14px }
+        .managementDashboard .statusRow { display:grid; grid-template-columns:110px minmax(30px,1fr) 75px; align-items:center; gap:12px; font-size:12px }
+        .managementDashboard .statusTrack { height:12px; background:#edf2f5; border-radius:6px; overflow:hidden }
+        .managementDashboard .statusBar { height:100%; border-radius:6px }
+        .managementDashboard .statusCount { text-align:right; font-variant-numeric:tabular-nums }
+        .managementDashboard .chartScroll { overflow-x:auto; -webkit-overflow-scrolling:touch }
+        .managementDashboard .cashChart { display:block; width:100%; min-width:660px; height:auto }
+        .managementDashboard .cashLegend { display:flex; gap:18px; flex-wrap:wrap; font-size:12px; margin:18px 0 }
+        .managementDashboard .cashLegend span { display:flex; align-items:center; gap:7px }
+        .managementDashboard .cashLegend i { width:10px; height:10px; border-radius:3px; display:inline-block }
+        .managementDashboard select { border:1px solid var(--line); border-radius:8px; background:#fff; padding:10px; margin-left:8px }
+        .managementDashboard summary { cursor:pointer; padding:12px 0; font-weight:650 }
+        .managementDashboard table { min-width:440px; width:100% }
+        .managementDashboard .overviewError { padding:16px; background:#fff0ee; border-radius:12px; color:#9c342c }
+        @media(max-width:480px) { .managementDashboard .overviewPanel { padding:16px } .managementDashboard .statusRow { grid-template-columns:90px minmax(20px,1fr) 65px; gap:8px } }
+      `}</style>
+      <div className="overviewHead">
+        <p>All records available to your account · As of {today} (Maldives)</p>
+        <button type="button" className="secondary" disabled={refreshing} onClick={() => void refresh()}>
+          {refreshing ? "Refreshing…" : "Refresh overview"}
+        </button>
+      </div>
+      {error && <div className="overviewError" role="alert">{error}</div>}
+      {!ready ? <div className="overviewPanel" role="status">
+        {refreshing ? "Loading overview…" : "Overview unavailable. Refresh to load all records before displaying totals."}
+      </div> : <>
+        <div className="overviewCards">
+          {[
+            ["Pending receivables", money(summary.pending), "Outstanding non-void invoice balances, after discounts, advances and other payments."],
+            ["Overdue payments", money(summary.overdue), "Outstanding balances on invoices due before today; included in pending receivables."],
+            ["Incomplete jobs", String(summary.incomplete), "Jobs with the Incomplete status."],
+            ["Invoice-missing jobs", String(summary.invoiceMissing), "Uses the existing Jobs rule; cancelled jobs are excluded."],
+            ["Jobs past due date", String(summary.pastDue), "Due before today and not completed, matching the existing due-date rule."],
+          ].map(([label, value, detail]) => <article className="overviewCard" key={label}>
+            <h2>{label}</h2><strong>{value}</strong><p>{detail}</p>
+          </article>)}
+        </div>
+        <section className="overviewPanel" aria-label="Job summary by status">
+          <div className="overviewHead"><h2>Job summary</h2><strong>{jobs.length} total jobs</strong></div>
+          <p>All statuses, including completed and cancelled jobs.</p>
+          {!jobs.length && <p>No jobs recorded yet.</p>}
+          <ul className="statusRows">
+            {summary.statuses.map(({ status, count }, index) => <li className="statusRow" key={status}>
+              <span>{labels[status]}</span>
+              <div className="statusTrack" aria-hidden="true"><div className="statusBar" style={{ width: `${count / maxCount * 100}%`, background: colors[index] }} /></div>
+              <span className="statusCount">{count} · {jobs.length ? Math.round(count / jobs.length * 100) : 0}%</span>
+            </li>)}
+          </ul>
+        </section>
+        <section className="overviewPanel" aria-label="Monthly income versus expenses">
+          <div className="overviewHead"><h2>Monthly income vs expenses</h2>
+            <label>Year<select value={year} onChange={(e) => setYear(Number(e.target.value))}>{years.map((y) => <option key={y} value={y}>{y}</option>)}</select></label>
+          </div>
+          <p>Income is recorded receipts, not invoice sales. Payments use their payment date. Advances use the invoice issue month because no separate advance receipt date is stored.</p>
+          <div className="cashLegend">
+            <span><i style={{ background:"#258163" }} />Income: {money(income)}</span>
+            <span><i style={{ background:"#d57948" }} />Expenses: {money(spent)}</span>
+            <span>Net: {money(income - spent)}</span>
+          </div>
+          {!income && !spent && <p>No income or expenses recorded for {year}.</p>}
+          <div className="chartScroll" tabIndex={0} role="region" aria-label="Scrollable monthly comparison chart">
+            <svg className="cashChart" viewBox="0 0 840 300" role="img" aria-labelledby={chartId}>
+              <title id={chartId}>{`Monthly income and expenses for ${year} in MVR. Exact amounts are available in the monthly figures table below.`}</title>
+              {[0, 0.25, 0.5, 0.75, 1].map((fraction) => <g key={fraction}>
+                <line x1="90" x2="825" y1={245 - fraction * 205} y2={245 - fraction * 205} stroke="#e6edf1" />
+                <text x="80" y={249 - fraction * 205} textAnchor="end" fill="#617584" fontSize="11">
+                  {new Intl.NumberFormat("en", { notation:"compact", maximumFractionDigits:1 }).format(peak * fraction)}
+                </text>
+              </g>)}
+              <text x="90" y="18" fill="#617584" fontSize="11">MVR</text>
+              {summary.months.map((month, index) => <g key={month.key}>
+                <rect x={103 + index * 60} y={245 - month.income / peak * 205} width="17" height={month.income / peak * 205} rx="3" fill="#258163"><title>{`${month.label} income: ${money(month.income)}`}</title></rect>
+                <rect x={123 + index * 60} y={245 - month.expenses / peak * 205} width="17" height={month.expenses / peak * 205} rx="3" fill="#d57948"><title>{`${month.label} expenses: ${money(month.expenses)}`}</title></rect>
+                <text x={121 + index * 60} y="270" textAnchor="middle" fill="#405766" fontSize="12">{month.label}</text>
+              </g>)}
+            </svg>
+          </div>
+          <details><summary>Monthly figures</summary><div className="chartScroll">
+            <table><caption>Income, expenses and net receipts for {year} (MVR)</caption>
+              <thead><tr><th scope="col">Month</th><th scope="col">Income</th><th scope="col">Expenses</th><th scope="col">Net</th></tr></thead>
+              <tbody>{summary.months.map((m) => <tr key={m.key}><th scope="row">{m.label}</th><td>{money(m.income)}</td><td>{money(m.expenses)}</td><td>{money(m.income - m.expenses)}</td></tr>)}</tbody>
+            </table>
+          </div></details>
+        </section>
+      </>}
+    </div>
+  );
+}
+
+function Jobs({
   jobs,
   documents,
   filtered,
