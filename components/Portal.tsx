@@ -936,6 +936,45 @@ export default function Portal() {
             jobs={jobs}
             documents={documents}
             open={setEditing}
+            canEdit={profile.active && ["super_admin", "admin"].includes(profile.role)}
+            saveCustomer={async (customer, input) => {
+              if (!profile.active || !["super_admin", "admin"].includes(profile.role)) {
+                throw new Error("Only Administrators and Super admins can edit customers.");
+              }
+              const payload = {
+                name: input.name.trim(),
+                phone: input.phone.trim() || null,
+                email: input.email.trim() || null,
+                contact_person: input.contact_person.trim() || null,
+              };
+              if (!payload.name) throw new Error("Customer name is required.");
+              const normalize = (value: string) => value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+              if (customers.some((c) => c.id !== customer.id && normalize(c.name) === normalize(payload.name))) {
+                throw new Error("Another customer already uses this name.");
+              }
+              if (normalize(payload.name) !== normalize(customer.name) && (
+                jobs.some((j) => !j.customer_id && normalize(j.customer_name) === normalize(customer.name)) ||
+                documents.some((d) => !d.job_id && normalize(d.customer_name) === normalize(customer.name))
+              )) {
+                throw new Error("This customer has older jobs or documents linked only by name. Keep the current name to preserve those links. You can still update their contact details.");
+              }
+              let updated: Customer;
+              if (demo) {
+                updated = { ...customer, ...payload };
+              } else {
+                const { data, error } = await createClient().from("customers")
+                  .update(payload).eq("id", customer.id)
+                  .select("id,name,phone,email,contact_person,created_at").single();
+                if (error) {
+                  if (error.code === "23505") throw new Error("Another customer already uses this name.");
+                  throw new Error(error.message || "Unable to update customer. Check your access and try again.");
+                }
+                updated = data as Customer;
+              }
+              setCustomers((current) => current.map((c) => c.id === updated.id ? updated : c)
+                .sort((a, b) => a.name.localeCompare(b.name)));
+              show("success", demo ? "Customer updated in preview mode" : "Customer updated");
+            }}
           />
         )}
         {view === "quotations" && (
@@ -1528,13 +1567,41 @@ function Customers({
   jobs,
   documents,
   open,
+  canEdit,
+  saveCustomer,
 }: {
   customers: Customer[];
   jobs: Job[];
   documents: FinancialDocument[];
   open: (job: Job) => void;
+  canEdit: boolean;
+  saveCustomer: (customer: Customer, input: { name: string; phone: string; email: string; contact_person: string }) => Promise<void>;
 }) {
   const [search, setSearch] = useState("");
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const editTitleId = useId();
+  async function submitCustomer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canEdit || !editingCustomer || saving) return;
+    const form = new FormData(event.currentTarget);
+    setSaving(true);
+    setSaveError("");
+    try {
+      await saveCustomer(editingCustomer, {
+        name: String(form.get("name") || ""),
+        phone: String(form.get("phone") || ""),
+        email: String(form.get("email") || ""),
+        contact_person: String(form.get("contact_person") || ""),
+      });
+      setEditingCustomer(null);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Unable to update customer.");
+    } finally {
+      setSaving(false);
+    }
+  }
   const customerRows = useMemo(() => {
     const normalizeName = (value: string) =>
       value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
@@ -1602,6 +1669,7 @@ function Customers({
               <th>Active jobs</th>
               <th>Total due</th>
               <th>Total jobs</th>
+              {canEdit && <th>Actions</th>}
             </tr>
           </thead>
           <tbody>
@@ -1631,12 +1699,43 @@ function Customers({
                   <strong>{money(customer.totalDue)}</strong>
                 </td>
                 <td data-label="Total jobs">{customer.jobs.length}</td>
+                {canEdit && <td data-label="Actions">
+                  <button type="button" className="secondary compact"
+                    aria-label={`Edit ${customer.name}`}
+                    onClick={() => { setSaveError(""); setEditingCustomer(customer); }}>
+                    <Pencil /> Edit
+                  </button>
+                </td>}
               </tr>
             ))}
           </tbody>
         </table>
         {!visible.length && <div className="empty">No customers found.</div>}
       </div>
+      {canEdit && editingCustomer && <div className="modal">
+        <form className="drawer" role="dialog" aria-modal="true" aria-labelledby={editTitleId}
+          onSubmit={submitCustomer} onKeyDown={(event) => {
+            if (event.key === "Escape" && !saving) setEditingCustomer(null);
+          }}>
+          <header>
+            <div><span className="eyebrow">CUSTOMERS</span><h2 id={editTitleId}>Edit customer</h2></div>
+            <button type="button" className="iconBtn" aria-label="Close customer editor"
+              disabled={saving} onClick={() => setEditingCustomer(null)}><X /></button>
+          </header>
+          <p className="helper">Update the customer directory. Existing jobs and issued documents keep their saved details.</p>
+          <fieldset disabled={saving} className="formGrid" style={{ border: 0, padding: 0, margin: 0 }}>
+            <Field label="Customer name" wide><input name="name" required autoFocus defaultValue={editingCustomer.name} /></Field>
+            <Field label="Contact number"><input name="phone" type="tel" defaultValue={editingCustomer.phone || ""} /></Field>
+            <Field label="Email"><input name="email" type="email" defaultValue={editingCustomer.email || ""} /></Field>
+            <Field label="Contact person" wide><input name="contact_person" defaultValue={editingCustomer.contact_person || ""} /></Field>
+          </fieldset>
+          {saveError && <p role="alert" style={{ color: "#bd3f36" }}>{saveError}</p>}
+          <footer>
+            <button type="button" className="secondary" disabled={saving} onClick={() => setEditingCustomer(null)}>Cancel</button>
+            <button type="submit" className="primary" disabled={saving}>{saving ? "Saving…" : "Save changes"}</button>
+          </footer>
+        </form>
+      </div>}
     </>
   );
 }
