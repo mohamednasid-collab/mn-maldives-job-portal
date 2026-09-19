@@ -751,9 +751,6 @@ export default function Portal() {
     { id: "invoices", label: "Invoices", Icon: Receipt },
     { id: "expenses", label: "Expenses", Icon: Receipt },
   ] as const;
-  const reportsNav = [
-    { id: "reports", label: "Reports", Icon: BarChart3 },
-  ] as const;
   const adminNav = [
     { id: "users", label: "Users", Icon: Users },
     { id: "designers", label: "Designers", Icon: Pencil },
@@ -762,7 +759,6 @@ export default function Portal() {
   const nav = [
     ...operationsNav,
     ...financeNav,
-    ...reportsNav,
     ...(["super_admin", "admin"].includes(profile.role) ? adminNav : []),
   ];
   const pageMeta: Record<View, [string, string]> = {
@@ -823,7 +819,6 @@ export default function Portal() {
         <nav>
           <NavGroup label="Operations" items={operationsNav} view={view} select={setView} close={() => setMenu(false)} />
           <NavGroup label="Finance" items={financeNav} view={view} select={setView} close={() => setMenu(false)} />
-          <NavGroup label="Reports" items={reportsNav} view={view} select={setView} close={() => setMenu(false)} />
           {["super_admin", "admin"].includes(profile.role) && <NavGroup label="Administration" items={adminNav} view={view} select={setView} close={() => setMenu(false)} />}
         </nav>
         <div className="account">
@@ -1578,6 +1573,8 @@ function Customers({
   saveCustomer: (customer: Customer, input: { name: string; phone: string; email: string; contact_person: string }) => Promise<void>;
 }) {
   const [search, setSearch] = useState("");
+  const [dueFilter, setDueFilter] = useState<"all" | "outstanding" | "clear">("all");
+  const [sortBy, setSortBy] = useState<"name_asc" | "name_desc" | "due_desc" | "jobs_desc">("name_asc");
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -1614,10 +1611,6 @@ function Customers({
               normalizeName(job.customer_name) === normalizeName(customer.name)),
         );
         const jobIds = new Set(customerJobs.map((job) => job.id));
-        const activeJobs = customerJobs.filter(
-          (job) =>
-            !["delivered", "completed", "cancelled"].includes(job.status),
-        );
         const invoices = documents.filter(
           (document) =>
             document.document_type === "invoice" && !document.voided_at &&
@@ -1630,7 +1623,6 @@ function Customers({
           ...customer,
           key: customer.id,
           jobs: customerJobs,
-          activeJobs,
           totalDue: invoices.reduce(
             (total, invoice) =>
               total +
@@ -1642,23 +1634,63 @@ function Customers({
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [customers, documents, jobs]);
   const query = search.trim().toLocaleLowerCase();
-  const visible = customerRows.filter((customer) =>
-    !query ||
-    [
-      customer.name,
-      customer.email,
-      customer.phone,
-      ...customer.jobs.map((job) => job.job_number),
-    ]
-      .join(" ")
-      .toLocaleLowerCase()
-      .includes(query),
-  );
+  const visible = customerRows
+    .filter((customer) => {
+      const matchesSearch =
+        !query ||
+        [
+          customer.name,
+          customer.email,
+          customer.phone,
+          ...customer.jobs.map((job) => job.job_number),
+        ]
+          .join(" ")
+          .toLocaleLowerCase()
+          .includes(query);
+      const matchesDue =
+        dueFilter === "all" ||
+        (dueFilter === "outstanding" ? customer.totalDue > 0 : customer.totalDue <= 0);
+      return matchesSearch && matchesDue;
+    })
+    .sort((a, b) => {
+      if (sortBy === "name_desc") return b.name.localeCompare(a.name);
+      if (sortBy === "due_desc") return b.totalDue - a.totalDue || a.name.localeCompare(b.name);
+      if (sortBy === "jobs_desc") return b.jobs.length - a.jobs.length || a.name.localeCompare(b.name);
+      return a.name.localeCompare(b.name);
+    });
   return (
     <>
       <section className="sectionHead">
         <h2>Customer list</h2>
-        <Filters search={search} setSearch={setSearch} />
+        <div className="filters">
+          <label className="searchBox">
+            <Search />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search customer, contact or job"
+            />
+          </label>
+          <select
+            value={dueFilter}
+            onChange={(event) => setDueFilter(event.target.value as "all" | "outstanding" | "clear")}
+            aria-label="Filter customers"
+          >
+            <option value="all">All customers</option>
+            <option value="outstanding">Outstanding balance</option>
+            <option value="clear">No outstanding balance</option>
+          </select>
+          <select
+            value={sortBy}
+            onChange={(event) => setSortBy(event.target.value as "name_asc" | "name_desc" | "due_desc" | "jobs_desc")}
+            aria-label="Sort customers"
+          >
+            <option value="name_asc">Name A–Z</option>
+            <option value="name_desc">Name Z–A</option>
+            <option value="due_desc">Highest due</option>
+            <option value="jobs_desc">Most jobs</option>
+          </select>
+        </div>
       </section>
       <div className="tableWrap responsiveTable">
         <table>
@@ -1666,7 +1698,6 @@ function Customers({
             <tr>
               <th>Customer</th>
               <th>Contact</th>
-              <th>Active jobs</th>
               <th>Total due</th>
               <th>Total jobs</th>
               {canEdit && <th>Actions</th>}
@@ -1683,16 +1714,6 @@ function Customers({
                     {customer.email && <span>{customer.email}</span>}
                     {customer.phone && <span>{customer.phone}</span>}
                     {!customer.email && !customer.phone && "—"}
-                  </span>
-                </td>
-                <td data-label="Active jobs">
-                  <span className="customerJobs">
-                    {customer.activeJobs.map((job) => (
-                      <button key={job.id} type="button" onClick={() => open(job)}>
-                        {job.job_number} · {labels[job.status]}
-                      </button>
-                    ))}
-                    {!customer.activeJobs.length && "—"}
                   </span>
                 </td>
                 <td data-label="Total due">
